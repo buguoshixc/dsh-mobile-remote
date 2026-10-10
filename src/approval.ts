@@ -38,7 +38,14 @@ export interface PendingApproval {
   subject?: string
   createdAt: number
   expiresAt: number
-  /** Path a phone can open: `/mobile-remote/decide?d=<id>&t=<token>`. */
+  /**
+   * Path a phone can open: `/mobile-remote/decide?d=<id>&t=<token>&w=allow`.
+   *
+   * The word is part of the frozen URL (`docs/06-hardening-contract.md` §5:
+   * `GET /mobile-remote/decide?d=<id>&t=<token>&w=<word>`), and the push body is
+   * documented as this round's one-time *allow* link. Minting the link without
+   * `w` made every tap answer `unavailable` and burn the capability (P0, t33).
+   */
   decidePath: string
   /** The raw token, for the push payload only (never for logs/audit). */
   token: string
@@ -68,6 +75,20 @@ interface Waiter {
   pending: PendingApproval
   settle: (outcome: ApprovalOutcome) => void
   timer: unknown
+}
+
+/**
+ * Drop one timer's hold on the event loop, when its handle supports it.
+ *
+ * `setTimer` is injectable, so the handle arrives as `unknown`: anything that is
+ * not a Node `Timeout` is left exactly as it is.
+ *
+ * @param timer - whatever `setTimer` returned.
+ */
+function unrefTimer(timer: unknown): void {
+  if (typeof timer !== 'object' || timer === null) return
+  const handle = timer as { unref?: unknown }
+  if (typeof handle.unref === 'function') (handle as { unref: () => void }).unref()
 }
 
 /**
@@ -108,7 +129,7 @@ export class ApprovalService {
       ...(issued.pending.subject === undefined ? {} : { subject: issued.pending.subject }),
       createdAt: issued.pending.createdAt,
       expiresAt: issued.expiresAt,
-      decidePath: `/mobile-remote/decide?d=${encodeURIComponent(issued.id)}&t=${encodeURIComponent(issued.t)}`,
+      decidePath: `/mobile-remote/decide?d=${encodeURIComponent(issued.id)}&t=${encodeURIComponent(issued.t)}&w=allow`,
       token: issued.t,
     }
     const wait = new Promise<ApprovalOutcome>((resolve) => {
@@ -117,6 +138,13 @@ export class ApprovalService {
         this.onEvent({ id: pending.id, result: 'timeout', word: FALLBACK_DECISION })
         resolve({ id: pending.id, word: FALLBACK_DECISION, code: 'timeout' })
       }, this.timeoutMs)
+      // A pending round must not hold the process open. A Node timer keeps the
+      // event loop alive for the whole `timeoutMs`, so one round nobody answers
+      // (the normal case in tests, and any host that wants a clean exit) pinned
+      // the process until the timeout elapsed — measured at exactly `timeoutMs`
+      // (t33). `unref()` lets the loop drain without changing the wait itself:
+      // the callback still fires whenever the process is alive.
+      unrefTimer(timer)
       this.waiters.set(pending.id, { pending, settle: resolve, timer })
     })
     this.onEvent({ id: pending.id, result: 'pending' })
@@ -174,8 +202,14 @@ export class ApprovalService {
   }
 
   private clearTimer(timer: unknown): void {
-    if (typeof timer === 'object' && timer !== null && typeof (timer as { unref?: unknown }).unref === 'function') {
+    if (timer === null || timer === undefined) return
+    try {
       clearTimeout(timer as Parameters<typeof clearTimeout>[0])
+    } catch {
+      // A handle `clearTimeout` cannot read must never take the plugin down; the
+      // round is already settled either way. (Gating this on `unref`, as this
+      // method used to, silently skipped the clear for any non-Node handle — the
+      // cleared round then still emitted a `timeout` audit event later, t33.)
     }
   }
 }

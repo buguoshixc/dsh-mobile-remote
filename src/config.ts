@@ -109,6 +109,45 @@ export const CONFIG_DEFAULTS: MobileRemoteConfig = {
 }
 
 /**
+ * Keep only usable prefixes, falling back to the frozen defaults.
+ *
+ * The fallback is load-bearing, not cosmetic: filtering an unusable value down
+ * to `[]` used to **disable** the second-confirmation gate silently — writing
+ * `riskyToolPrefixes: 'terminal.'` (a string, not a list) switched the
+ * protection off with no diagnostic at all (t33). An empty result therefore
+ * falls back to the frozen defaults; deliberately switching the gate off is what
+ * `requireSecondConfirmation: false` is for.
+ *
+ * @param value - the raw config field, in whatever shape it arrived.
+ * @returns a non-empty prefix list.
+ */
+function usablePrefixes(value: unknown): string[] {
+  const kept = (Array.isArray(value) ? value : []).filter(
+    (entry): entry is string => typeof entry === 'string' && entry.length > 0,
+  )
+  return kept.length > 0 ? kept : [...CONFIG_DEFAULTS.riskyToolPrefixes]
+}
+
+/**
+ * Coerce a config field that must be a **positive** safe integer.
+ *
+ * `Schema.natural()` is `.min(0)`, so `0` is a *legal* schema value that the
+ * kernel constructors reject: `new ApprovalService({timeoutMs: 0})` and
+ * `DeviceRegistry.register` both throw on a non-positive bound. A profile writing
+ * `approvalTimeoutMs: 0` therefore took down kernel installation instead of
+ * producing the readable refusal this module promises (t33). Anything unusable
+ * falls back to the frozen default, which is also the fail-closed direction: both
+ * defaults are the most patient values the plugin ships.
+ *
+ * @param value - the raw field, after the accessor/plain-value resolution.
+ * @param fallback - the frozen default for this key.
+ * @returns a positive safe integer.
+ */
+function positiveOf(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : fallback
+}
+
+/**
  * Read one config field that may arrive as a plain value or as a reactive
  * accessor (`config.field.get()` in the 0.2 line). An unreadable accessor falls
  * back rather than throwing, because a broken config projection must not take
@@ -143,30 +182,38 @@ export function resolveConfig(raw: unknown): MobileRemoteConfig {
     pairingAuthority: fieldOf(source['pairingAuthority'], CONFIG_DEFAULTS.pairingAuthority),
     mobileCss: fieldOf(source['mobileCss'], CONFIG_DEFAULTS.mobileCss),
     pushTopic: fieldOf(source['pushTopic'], CONFIG_DEFAULTS.pushTopic),
-    approvalTimeoutMs: fieldOf(source['approvalTimeoutMs'], CONFIG_DEFAULTS.approvalTimeoutMs),
+    approvalTimeoutMs: positiveOf(fieldOf(source['approvalTimeoutMs'], CONFIG_DEFAULTS.approvalTimeoutMs), CONFIG_DEFAULTS.approvalTimeoutMs),
     auditLog: fieldOf(source['auditLog'], CONFIG_DEFAULTS.auditLog),
     deviceTableLimit: fieldOf(source['deviceTableLimit'], CONFIG_DEFAULTS.deviceTableLimit),
-    deviceGrantTtlMs: fieldOf(source['deviceGrantTtlMs'], CONFIG_DEFAULTS.deviceGrantTtlMs),
+    deviceGrantTtlMs: positiveOf(fieldOf(source['deviceGrantTtlMs'], CONFIG_DEFAULTS.deviceGrantTtlMs), CONFIG_DEFAULTS.deviceGrantTtlMs),
     decisionTtlMs: fieldOf(source['decisionTtlMs'], CONFIG_DEFAULTS.decisionTtlMs),
     pendingLimit: fieldOf(source['pendingLimit'], CONFIG_DEFAULTS.pendingLimit),
     usedLimit: fieldOf(source['usedLimit'], CONFIG_DEFAULTS.usedLimit),
     maxBodyBytes: fieldOf(source['maxBodyBytes'], CONFIG_DEFAULTS.maxBodyBytes),
-    // A non-array (or array holding non-strings) must not widen the gate: keep
-    // only usable prefixes, and fall back to the frozen defaults when empty.
-    riskyToolPrefixes: (Array.isArray(prefixes) ? prefixes : []).filter((entry): entry is string => typeof entry === 'string' && entry.length > 0),
+    // A non-array (or array holding non-strings) must not widen the gate, and an
+    // empty result must not switch it off either — see `usablePrefixes`.
+    riskyToolPrefixes: usablePrefixes(prefixes),
     requireSecondConfirmation: fieldOf(source['requireSecondConfirmation'], CONFIG_DEFAULTS.requireSecondConfirmation),
   }
 }
 
 /**
  * The decision-link lifetime actually in force: `decisionTtlMs` when set, else
- * the approval timeout (a link must never outlive the wait it decides).
+ * the approval timeout — never longer than the wait it decides.
+ *
+ * The bound is the point of this function, not a detail: a configured
+ * `decisionTtlMs` larger than `approvalTimeoutMs` used to be returned verbatim,
+ * so a link outlived its own round and a tap after the timeout hit
+ * `denied-unknown-id` — a live-looking link answering 403 against a round that no
+ * longer existed (t33).
  *
  * @param config - the resolved config.
- * @returns the lifetime in milliseconds.
+ * @returns the lifetime in milliseconds, bounded by the approval timeout.
  */
 export function decisionTtlOf(config: MobileRemoteConfig): number {
-  return config.decisionTtlMs > 0 ? config.decisionTtlMs : config.approvalTimeoutMs
+  const wait = config.approvalTimeoutMs
+  const link = config.decisionTtlMs > 0 ? config.decisionTtlMs : wait
+  return Math.min(link, wait)
 }
 
 /** Whether pairing is switched on at all (the empty authority means "off"). */

@@ -63,7 +63,16 @@ const SECRET = Buffer.from(
   'hex',
 ).toString('base64url')
 
-/** The shipped fence's decision order, copied from T6's harness (evidence :205-219, :586-594). */
+/**
+ * The shipped fence's decision order, kept **equivalent** to T6's copy
+ * (`test/acceptance-t6.test.mjs`) and to the evidence (:205-219, :586-594).
+ *
+ * This copy used to stop after the trusted-host check, which meant every
+ * conclusion drawn here was drawn against a fence weaker than the real one: a
+ * `sec-fetch-site: cross-site` or foreign-`Origin` regression in the plugin could
+ * not fail any assertion in this file (t33). The two checks and the test below
+ * keep the copies from drifting apart again.
+ */
 function shippedRule(req, { trustedHosts = [AUTHORITY] } = {}) {
   const headers = req.headers ?? {}
   const hostHeader = headers['host']
@@ -84,6 +93,15 @@ function shippedRule(req, { trustedHosts = [AUTHORITY] } = {}) {
     }
   })
   if (!loopback && !trusted) return { rejection: 403 }
+  if (headers['sec-fetch-site'] === 'cross-site') return { rejection: 403 }
+  const origin = headers['origin']
+  if (origin !== undefined) {
+    try {
+      if (new URL(origin).host !== hostUrl.host) return { rejection: 403 }
+    } catch {
+      return { rejection: 403 }
+    }
+  }
   const cookie = String(headers['cookie'] ?? '')
   return cookie.includes(FENCE_COOKIE) ? { peer: { id: 'operator' } } : { rejection: 401 }
 }
@@ -346,6 +364,26 @@ function linkFrom(push) {
   return { id: params.get('d'), token: params.get('t'), path: `/mobile-remote/decide?${match[1]}` }
 }
 
+/**
+ * Re-aim one link at a single word, **replacing** the word the link carries.
+ *
+ * Since t33 a minted/pushed link carries `&w=allow` of its own, and the route
+ * reads the *first* `w`. Appending `&w=deny` to such a link therefore no longer
+ * changes the decision — it has to be set. Keeping this explicit is the point:
+ * which word a link decides with is a property of the link, not of what a test
+ * appends.
+ *
+ * @param path - a decide path from `linkFrom`/`mintLink`.
+ * @param word - the word to decide with; the empty string removes it entirely.
+ * @returns the same path with exactly that word.
+ */
+function withWord(path, word) {
+  const url = new URL(`http://local.invalid${path}`)
+  if (word === '') url.searchParams.delete('w')
+  else url.searchParams.set('w', word)
+  return `${url.pathname}${url.search}`
+}
+
 /** Ask the responder for one decision and return a function resolving its outcome. */
 function openRound(listeners, payload = { toolName: 'terminal.exec', sessionId: 's1' }) {
   const listener = listeners.get('approval/request')
@@ -567,17 +605,21 @@ test('decide: off-vocabulary words normalise to unavailable, deny/cancel keep th
   const cases = [
     { word: 'yes', expected: 'unavailable', page: 'unavailable' },
     { word: 'Allow ', expected: 'unavailable', page: 'unavailable' },
-    { word: '', expected: 'unavailable', page: 'unavailable' },
     { word: '<script>alert(1)</script>', expected: 'unavailable', page: 'unavailable' },
     { word: 'deny', expected: 'rejected', page: 'deny' },
     { word: 'cancel', expected: 'cancelled', page: 'cancel' },
   ]
+  // An empty word is deliberately **not** in this table any more: since t33 a
+  // word-less link is refused with 400 *without* consuming the capability, so it
+  // no longer fits this helper's "200 + normalised page" shape. That branch is
+  // pinned by "t33: a decide link with no word is refused without consuming the
+  // capability" at the end of this file.
   /** Open one round, decide it with `entry.word` using the link `obtain` returns. */
   const decide = async (entry, obtain) => {
     const before = sink.pushes.length
     const round = openRound(mounted.listeners)
     const link = await obtain(before)
-    const answered = await call(server.port, `${link.path}&w=${encodeURIComponent(entry.word)}`)
+    const answered = await call(server.port, withWord(link.path, entry.word))
     assert.equal(
       answered.status,
       200,
@@ -1058,12 +1100,12 @@ test('adversarial: confirmation cannot be bypassed (random id, foreign id, denie
 
     // — push path: a real round, but answered `deny` — the id exists, must not authorise —
     const deniedLink = await openedRound(() => revoke({}))
-    assert.equal((await call(server.port, `${deniedLink.path}&w=deny`)).status, 200)
+    assert.equal((await call(server.port, withWord(deniedLink.path, 'deny'))).status, 200)
     assert.equal((await revoke({ 'x-dsmr-confirm': deniedLink.id })).status, 403, 'a denied round never approves')
 
     // — push path: an off-vocabulary word normalises to unavailable → still refused —
     const offLink = await openedRound(() => revoke({}))
-    assert.equal((await call(server.port, `${offLink.path}&w=yes`)).status, 200)
+    assert.equal((await call(server.port, withWord(offLink.path, 'yes'))).status, 200)
     assert.equal((await revoke({ 'x-dsmr-confirm': offLink.id })).status, 403, 'unavailable never approves')
 
     // — mint path: a round that was never answered must not authorise —
@@ -1339,5 +1381,154 @@ test('adversarial: a confirmation flood is throttled without minting new rounds'
   } finally {
     await server.close()
     await sink.close()
+  }
+})
+
+// ── 9. t33 regressions: the pushed link, the config, and the fence copy ──────
+
+test('t33: the pushed decision link approves by itself, with no hand-added word', async () => {
+  const sink = await startPushSink()
+  const mounted = await mountReady({ config: { pushTopic: sink.url, approvalTimeoutMs: 3000 } })
+  const server = await serve(mounted.routes)
+  const remote = { host: AUTHORITY, cookie: FENCE_COOKIE, 'x-forwarded-for': '203.0.113.7' }
+  try {
+    const device = await registerDevice(server.port, 'phone-F')
+    const revoke = (headers) =>
+      call(server.port, '/mobile-remote/device/revoke', {
+        method: 'POST',
+        headers: { ...remote, 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({ deviceId: device.id }),
+      })
+
+    const before = sink.pushes.length
+    assert.equal((await revoke({})).status, 403, 'the gated attempt must be refused')
+    const link = linkFrom(await nextPush(sink, before))
+
+    // The regression this test exists for: use the pushed URL **verbatim**. Before
+    // t33 it carried no `w`, so this single call settled the round `unavailable`
+    // and burned the one-time token, while the page still answered 200.
+    assert.match(link.path, /[?&]w=allow/, `the pushed link must carry its word, got ${link.path}`)
+    const tapped = await call(server.port, link.path)
+    assert.equal(tapped.status, 200, `tapping the pushed link must answer 200, got ${tapped.status}: ${tapped.body}`)
+    assert.match(tapped.body, /allow/, `the page must record the allow, got: ${tapped.body}`)
+
+    // And the round it approved is redeemable — the point of the whole flow.
+    assert.equal(
+      (await revoke({ 'x-dsmr-confirm': link.id })).status,
+      200,
+      'the round the pushed link approved must authorise the gated revoke',
+    )
+  } finally {
+    await server.close()
+    await sink.close()
+  }
+})
+
+test('t33: a decide link with no word is refused without consuming the capability', async () => {
+  const sink = await startPushSink()
+  const mounted = await mountReady({ config: { pushTopic: sink.url, approvalTimeoutMs: 3000 } })
+  const server = await serve(mounted.routes)
+  const remote = { host: AUTHORITY, cookie: FENCE_COOKIE, 'x-forwarded-for': '203.0.113.7' }
+  try {
+    const device = await registerDevice(server.port, 'phone-G')
+    const revoke = (headers) =>
+      call(server.port, '/mobile-remote/device/revoke', {
+        method: 'POST',
+        headers: { ...remote, 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({ deviceId: device.id }),
+      })
+    const before = sink.pushes.length
+    assert.equal((await revoke({})).status, 403)
+    const link = linkFrom(await nextPush(sink, before))
+
+    // What a link prefetch, a chat-app preview or a truncated URL looks like: the
+    // capability parameters but no decision word.
+    const bare = `/mobile-remote/decide?d=${encodeURIComponent(link.id)}&t=${encodeURIComponent(link.token)}`
+    const prefetched = await call(server.port, bare)
+    assert.equal(prefetched.status, 400, `a word-less link must be refused, got ${prefetched.status}`)
+    assert.ok(
+      mounted.logLines.some((line) => line.includes('decide-no-word')),
+      'and the refusal is audited as decide-no-word',
+    )
+
+    // The capability survived the prefetch: the real link still decides, and the
+    // round is still redeemable afterwards.
+    assert.equal((await call(server.port, link.path)).status, 200, 'the real link must still decide')
+    assert.equal((await revoke({ 'x-dsmr-confirm': link.id })).status, 200, 'and the round is still redeemable')
+  } finally {
+    await server.close()
+    await sink.close()
+  }
+})
+
+test('t33: a schema-legal config the kernel rejects must not kill or hang the plugin', async () => {
+  const rejections = []
+  const onRejection = (reason) => rejections.push(reason)
+  process.on('unhandledRejection', onRejection)
+  const withTimeout = (promise, label) =>
+    Promise.race([
+      promise,
+      new Promise((_resolve, reject) => setTimeout(() => reject(new Error(`timed out: ${label}`)), 2000)),
+    ])
+  try {
+    // `Schema.natural()` is `.min(0)`: 0 is legal to the schema and rejected by
+    // both kernel constructors. The first used to be an unhandled rejection with
+    // no log at all (P3/P4 dead for the session); the second left the request
+    // unanswered entirely.
+    const timeoutZero = await mountReady({ config: { approvalTimeoutMs: 0 } })
+    assert.ok(wiringDone(timeoutZero), 'approvalTimeoutMs: 0 must still install the kernel')
+
+    const ttlZero = await mountReady({ config: { deviceGrantTtlMs: 0 } })
+    assert.ok(wiringDone(ttlZero), 'deviceGrantTtlMs: 0 must still install the kernel')
+    const server = await serve(ttlZero.routes)
+    try {
+      const registered = await withTimeout(
+        call(server.port, '/mobile-remote/device/register', {
+          method: 'POST',
+          headers: { host: AUTHORITY, cookie: FENCE_COOKIE, 'content-type': 'application/json' },
+          body: JSON.stringify({ label: 'phone-H' }),
+        }),
+        'a register request the handler threw on',
+      )
+      assert.equal(registered.status, 200, `register must answer, never hang: got ${registered.status}`)
+      assert.ok(registered.headers['set-cookie'], 'and it must still issue a credential')
+    } finally {
+      await server.close()
+    }
+  } finally {
+    process.off('unhandledRejection', onRejection)
+  }
+  assert.deepEqual(rejections.map(String), [], 'no unhandled rejection may escape mounting')
+})
+
+test('t33: this file\'s fence copy refuses cross-site and foreign-Origin requests', async () => {
+  const mounted = await mountReady()
+  const server = await serve(mounted.routes)
+  const trusted = { host: AUTHORITY, cookie: FENCE_COOKIE }
+  try {
+    assert.equal((await call(server.port, '/mobile-remote/pair', { headers: trusted })).status, 200)
+    assert.equal(
+      (await call(server.port, '/mobile-remote/pair', {
+        headers: { ...trusted, 'sec-fetch-site': 'cross-site' },
+      })).status,
+      403,
+      'a cross-site request must be fenced off',
+    )
+    assert.equal(
+      (await call(server.port, '/mobile-remote/pair', {
+        headers: { ...trusted, origin: 'https://evil.example.com' },
+      })).status,
+      403,
+      'a foreign Origin must be fenced off',
+    )
+    assert.equal(
+      (await call(server.port, '/mobile-remote/pair', {
+        headers: { ...trusted, origin: `https://${AUTHORITY}` },
+      })).status,
+      200,
+      'a same-origin request still passes',
+    )
+  } finally {
+    await server.close()
   }
 })

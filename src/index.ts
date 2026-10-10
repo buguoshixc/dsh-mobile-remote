@@ -452,6 +452,18 @@ function installSecurityLayer(
       holder.installing = false
       holder.reason = 'credentials-error'
       logger?.warn?.('[dsh-mobile-remote] P3/P4 加固层未启用：读取凭据记录时抛错')
+    }).catch((error: unknown) => {
+      // A throw inside the *fulfilment* handler lands here, never in the
+      // rejection handler above: `.then(onOk, onErr)` routes only this promise's
+      // own rejection to `onErr`, while a throw in `onOk` rejects the promise the
+      // `.then` returned — which `void` discarded. A config the schema accepts but
+      // the kernel rejects (`approvalTimeoutMs: 0`, `deviceGrantTtlMs: 0`) was
+      // therefore an unhandled rejection: no response, no log, and P3/P4 dead for
+      // the whole session (t33). `resolveConfig` now screens those values too; this
+      // catch is what keeps any *other* throw from escaping.
+      holder.installing = false
+      holder.reason = 'kernel-install-failed'
+      logger?.warn?.(`[dsh-mobile-remote] P3/P4 加固层未启用：安装安全内核时抛错（${sanitizeError(error, 'kernel')}）`)
     })
   }
 

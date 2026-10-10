@@ -21,6 +21,7 @@ import { createServer } from 'node:http'
 import { test } from 'node:test'
 
 import { ApprovalService } from '../src/approval.ts'
+import { decisionTtlOf, resolveConfig } from '../src/config.ts'
 import { decisionKey, signDecision } from '../src/decision.ts'
 import { apply } from '../src/index.ts'
 
@@ -48,6 +49,23 @@ async function until(predicate, timeoutMs = 5000) {
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
   return false
+}
+
+/**
+ * Re-aim one decide link at a single word, **replacing** the word it carries.
+ *
+ * Since t33 a minted link carries `&w=allow` of its own and the route reads the
+ * first `w`, so appending a different word no longer overrides it (t33).
+ *
+ * @param path - a decide path.
+ * @param word - the decision word; the empty string removes it.
+ * @returns the same path carrying exactly that word.
+ */
+function withWord(path, word) {
+  const url = new URL(`http://local.invalid${path}`)
+  if (word === '') url.searchParams.delete('w')
+  else url.searchParams.set('w', word)
+  return `${url.pathname}${url.search}`
 }
 
 /**
@@ -246,8 +264,13 @@ test('decide: tampered and unknown links are refused without leaking anything', 
     assert.ok(id && token)
 
     const refused = []
-    // One character of the signature flipped.
-    const flipped = `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`
+    // One character of the signature flipped — deliberately the **first** one, not
+    // the last. A base64url group's final character carries padding bits, so
+    // flipping it can leave the decoded bytes identical and the verdict `malformed`
+    // rather than `bad-signature`: a ~1-in-64 flake this suite had been carrying
+    // (t33). Flipping the leading character always changes the digest.
+    const signatureAt = token.lastIndexOf('.') + 1
+    const flipped = `${token.slice(0, signatureAt)}${token[signatureAt] === 'A' ? 'B' : 'A'}${token.slice(signatureAt + 1)}`
     refused.push(await harness.request({ url: `/mobile-remote/decide?d=${id}&t=${flipped}&w=allow`, headers: {} }))
     // A well-signed link for an id that was never issued: refused as unknown.
     const unknownId = '00000000-0000-4000-8000-000000000000'
@@ -320,7 +343,7 @@ test('decide: the vocabulary is closed — a garbage word never becomes an allow
     assert.ok(await until(() => pushed.length === 1), 'the decision link is pushed')
     const link = linkOf(pushed[0])
 
-    const answer = await harness.request({ url: `${link}&w=FROBNICATE`, headers: {} })
+    const answer = await harness.request({ url: withWord(link, 'FROBNICATE'), headers: {} })
     assert.equal(answer.status, 200, 'a verified link is a decision even with a garbage word')
     assert.equal(await answerPromise, 'unavailable', 'and that decision is unavailable, not allow')
   } finally {
@@ -475,4 +498,102 @@ test('push: an empty pushTopic never touches the network', async () => {
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+// ── t33 regressions: the link that is minted, and the config that reaches the kernel ──
+
+test('t33: the minted decision link carries its own word and round-trips to allow', async () => {
+  const approval = new ApprovalService({ secret: SECRET_BYTES, timeoutMs: 5000 })
+  const { pending, wait } = approval.ask({ summary: 'probe' })
+  const url = new URL(`http://local.invalid${pending.decidePath}`)
+
+  assert.equal(url.pathname, '/mobile-remote/decide')
+  assert.equal(url.searchParams.get('w'), 'allow', 'the link must carry its decision word (t33)')
+
+  // Exactly the call the decide route makes when the pushed URL is opened verbatim.
+  const outcome = approval.answer({
+    id: url.searchParams.get('d'),
+    t: url.searchParams.get('t'),
+    word: url.searchParams.get('w'),
+  })
+  assert.equal(outcome.code, 'ok')
+  assert.equal(outcome.word, 'allow', 'opening the minted link must allow, never settle unavailable')
+  assert.equal((await wait).word, 'allow', 'and the waiter the caller is holding sees the allow')
+})
+
+test('t33: a pending round does not hold the event loop open', () => {
+  const seen = []
+  const approval = new ApprovalService({
+    secret: SECRET_BYTES,
+    timeoutMs: 60_000,
+    // The injection seam the suite had never used — it is what makes timer
+    // hygiene observable at all.
+    setTimer: (fn, ms) => {
+      const handle = setTimeout(fn, ms)
+      const record = { handle, unrefCalled: false }
+      seen.push(record)
+      const original = handle.unref.bind(handle)
+      handle.unref = () => {
+        record.unrefCalled = true
+        return original()
+      }
+      return handle
+    },
+  })
+  approval.ask({ summary: 'probe' })
+  assert.equal(seen.length, 1, 'one round, one timer')
+  assert.equal(seen[0].unrefCalled, true, "the round timer must be unref'd, or a stray round pins the process")
+  clearTimeout(seen[0].handle)
+})
+
+test('t33: a non-Node timer handle is still cleared when the round is answered', () => {
+  const cleared = []
+  const originalClear = globalThis.clearTimeout
+  globalThis.clearTimeout = (handle) => {
+    cleared.push(handle)
+    return originalClear(handle)
+  }
+  try {
+    const approval = new ApprovalService({
+      secret: SECRET_BYTES,
+      timeoutMs: 60_000,
+      // A browser-style opaque handle has no `unref`; the old guard read that
+      // absence as "not a timer" and skipped the clear, so an answered round could
+      // still emit a `timeout` audit event later (t33).
+      setTimer: () => 'opaque-handle',
+    })
+    const { pending } = approval.ask({ summary: 'probe' })
+    assert.equal(approval.answer({ id: pending.id, t: pending.token, word: 'deny' }).code, 'ok')
+    assert.deepEqual(cleared, ['opaque-handle'], 'the handle must be cleared whatever its type')
+  } finally {
+    globalThis.clearTimeout = originalClear
+  }
+})
+
+test('t33: config values the kernel rejects are coerced before they reach it', () => {
+  const defaults = resolveConfig({})
+  assert.equal(defaults.approvalTimeoutMs, 120000)
+  assert.equal(defaults.deviceGrantTtlMs, 2592000000)
+
+  // `Schema.natural()` is `.min(0)`, so every one of these is schema-legal and
+  // every one of them used to reach a constructor that throws.
+  assert.equal(resolveConfig({ approvalTimeoutMs: 0 }).approvalTimeoutMs, 120000)
+  assert.equal(resolveConfig({ approvalTimeoutMs: -1 }).approvalTimeoutMs, 120000)
+  assert.equal(resolveConfig({ approvalTimeoutMs: 1.5 }).approvalTimeoutMs, 120000)
+  assert.equal(resolveConfig({ deviceGrantTtlMs: 0 }).deviceGrantTtlMs, 2592000000)
+
+  // A usable value is still honoured, plain or behind an accessor.
+  assert.equal(resolveConfig({ approvalTimeoutMs: 3000 }).approvalTimeoutMs, 3000)
+  assert.equal(resolveConfig({ approvalTimeoutMs: { get: () => 4000 } }).approvalTimeoutMs, 4000)
+
+  // A typo must not switch the second-confirmation gate off.
+  const frozen = ['terminal.', 'credentials.', 'pluginManager.']
+  assert.deepEqual(resolveConfig({ riskyToolPrefixes: 'terminal.' }).riskyToolPrefixes, frozen)
+  assert.deepEqual(resolveConfig({ riskyToolPrefixes: [] }).riskyToolPrefixes, frozen)
+  assert.deepEqual(resolveConfig({ riskyToolPrefixes: ['terminal.'] }).riskyToolPrefixes, ['terminal.'])
+
+  // A link must never outlive the wait it decides.
+  assert.equal(decisionTtlOf({ ...defaults, decisionTtlMs: 600000, approvalTimeoutMs: 1000 }), 1000)
+  assert.equal(decisionTtlOf({ ...defaults, decisionTtlMs: 30, approvalTimeoutMs: 300 }), 30)
+  assert.equal(decisionTtlOf({ ...defaults, decisionTtlMs: 0, approvalTimeoutMs: 300 }), 300)
 })

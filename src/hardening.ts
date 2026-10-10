@@ -7,11 +7,11 @@
  *  1. **Where a request came from** is decided by {@link classifySource}, which
  *     consumes the audit module's `sourceFacts()` and never re-derives an
  *     address. It implements the T9 gate frozen in
- *     `docs/00-contract.md` 搂7.0.2 `CHANGE-t21-C`: `source` may be treated as
+ *     `docs/00-contract.md` §7.0.2 `CHANGE-t21-C`: `source` may be treated as
  *     the real remote client **only** when `viaForwarded` is true *and* the
  *     socket peer is the loopback the reverse proxy owns. Any inconsistency
  *     (`source` claims loopback while the kernel saw a routable peer, or no
- *     socket peer at all) fails safe **as remote** 鈥?a hardening decision may
+ *     socket peer at all) fails safe **as remote** — a hardening decision may
  *     never take a client-supplied header's word for it.
  *  2. **Dangerous calls need a second pair of eyes**: a tool name under
  *     {@link DEFAULT_RISKY_PREFIXES} called from a remote source must be
@@ -29,7 +29,7 @@
 import type { ApprovalOutcome, ApprovalService, PendingApproval } from './approval.ts'
 import { headerValue, type AuditHeaderBag, type SourceFacts } from './audit.ts'
 
-/** The prefixes frozen by `docs/06-hardening-contract.md` 搂4. */
+/** The prefixes frozen by `docs/06-hardening-contract.md` §4. */
 export const DEFAULT_RISKY_PREFIXES: readonly string[] = ['terminal.', 'credentials.', 'pluginManager.']
 
 /** Header a remote caller uses to present its redeemed confirmation id. */
@@ -94,22 +94,22 @@ export function classifySource(facts: SourceFacts, headers?: AuditHeaderBag | un
     return { ...base, basis: 'direct', remote: true, trusted: true }
   }
   if (base.viaForwarded) {
-    // **F1 (t29) 鈥?a forwarded request is remote, period.**
+    // **F1 (t29) — a forwarded request is remote, period.**
     //
     // The previous reading took the *leftmost* XFF entry as the client and then
     // asked "is that a loopback?", which let a client that writes its own
     // `X-Forwarded-For: 127.0.0.1` be classified as local whenever the proxy
     // appends rather than replaces (t14 measured the bypasses). Loopback-shaped
-    // spellings are unbounded 鈥?distance forms, IPv6 forms, whitespace 鈥?so the
+    // spellings are unbounded — distance forms, IPv6 forms, whitespace — so the
     // allow-list can never keep up. The safe rule is the contract's own
-    // principle (`docs/00-contract.md` 搂7.0.2, `CHANGE-t21-C`, extended by
+    // principle (`docs/00-contract.md` §7.0.2, `CHANGE-t21-C`, extended by
     // `CHANGE-t29-A`): if a forwarding header is what named the client, the
     // request is remote. A local operator hits 127.0.0.1 **without** XFF, so
     // this costs no legitimate local access.
     return { ...base, basis: 'proxied', remote: true, trusted: true }
   }
   // Proxies that set only `Forwarded:` (RFC 7239) and no XFF: no address to
-  // attribute, but the shape is still a forwarded request 鈥?never local.
+  // attribute, but the shape is still a forwarded request — never local.
   const forwarded = headerValue(headers, 'forwarded')
   if (typeof forwarded === 'string' && forwarded.trim().length > 0) {
     return { ...base, basis: 'proxied', remote: true, trusted: false }
@@ -214,7 +214,7 @@ export const DEFAULT_CONFIRMATION_COOLDOWN_MS = 0
  * The bound is *pressure*-based, not time-based: while the approval service
  * already holds this many pending rows, the gate refuses to mint another, so a
  * remote flood cannot walk the pending table toward its eviction edge (where
- * the oldest row 鈥?possibly a legitimate one 鈥?gets dropped). Distinct,
+ * the oldest row — possibly a legitimate one — gets dropped). Distinct,
  * answered-in-sequence requests are unaffected, which a wall-clock cooldown
  * would have throttled with no security gain.
  */
@@ -263,7 +263,7 @@ export class SecondConfirmationGate {
    * Open one confirmation round for a dangerous call.
    *
    * Refuses (returns `undefined`) while either bound is in force: the optional
-   * time cooldown, or the pending-pressure ceiling (F5 鈥?a flood must not walk
+   * time cooldown, or the pending-pressure ceiling (F5 — a flood must not walk
    * the approval table toward its eviction edge).
    *
    * @param action - the dangerous action being confirmed.
@@ -280,7 +280,7 @@ export class SecondConfirmationGate {
       return undefined
     }
     this.lastRoundAt = at
-    const summary = action.summary ?? `鍗遍櫓璋冪敤闇€瑕佷簩娆＄‘璁わ細${action.toolName}`
+    const summary = action.summary ?? `危险调用需要二次确认：${action.toolName}`
     const { pending, wait } = this.service.ask({ summary, subject: action.toolName })
     this.states.set(pending.id, 'pending')
     const guard = wait.then(

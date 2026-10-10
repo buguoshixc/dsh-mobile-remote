@@ -14,7 +14,7 @@
  * typecheck -> build -> test in that order).
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -186,4 +186,39 @@ test('host artifact is an ESM module with a default-free named surface', () => {
   assert.match(source, /export\s*\{/, 'host artifact must contain an ESM export statement')
   assert.doesNotMatch(source, /\bmodule\.exports\b/, 'host artifact must not be CommonJS')
   assert.doesNotMatch(source, /\brequire\(/, 'host artifact must not call require()')
+})
+
+test('sources stay UTF-8 without a BOM and free of GBK mojibake', () => {
+  // t33: `src/hardening.ts` had shipped with **every** non-ASCII character
+  // corrupted by a UTF-8 -> GBK round trip: the section sign became U+6402, an em
+  // dash became U+9225, and a user-facing summary became a run of unrelated CJK
+  // ideographs (U+9357 U+904D U+6AD3 ...). Nothing caught it: the file still
+  // parsed, still type-checked, and the corrupted string only surfaced at runtime,
+  // in a pending-approval summary. The characters spelled out in MOJIBAKE below
+  // are the fingerprints of that corruption; none of them is legitimate anywhere
+  // in this repository, so a match is always a fault. (They are spelled as escape
+  // sequences on purpose — this comment must not contain them either.)
+  const MOJIBAKE = /[\u6402\u9225\u9357\u904d\u6ad3\u748b\u51aa\u6564\u95c7\u7455\u4f77\u7c29\u5a06\u7481\u308f\u7d30]/
+  const files = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.(ts|mjs)$/.test(entry.name)) files.push(full)
+    }
+  }
+  walk(join(repoRoot, 'src'))
+  walk(join(repoRoot, 'test'))
+  assert.ok(files.length > 20, `expected to walk the source tree, found ${files.length} files`)
+
+  for (const file of files) {
+    const bytes = readFileSync(file)
+    assert.notDeepEqual(
+      [...bytes.subarray(0, 3)],
+      [0xef, 0xbb, 0xbf],
+      `${file} must stay UTF-8 **without** a BOM`,
+    )
+    const hit = MOJIBAKE.exec(bytes.toString('utf8'))
+    assert.equal(hit, null, `${file} contains GBK mojibake: ${JSON.stringify(hit?.[0])}`)
+  }
 })

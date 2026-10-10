@@ -167,9 +167,19 @@ export class DeviceRegistry {
     // Reversal is the explicit, audited {@link unrevoke} below.
     this.rows.set(id, device)
     while (this.rows.size > this.limit) {
-      const oldest = [...this.rows.values()].sort((a, b) => a.createdAt - b.createdAt)[0]
-      if (oldest === undefined || oldest.id === id) break
-      this.rows.delete(oldest.id)
+      // **Eviction must never drop a revoked row.** A revoked row *is* the record
+      // of the revocation: dropping it made `isRevoked()` false and let the same
+      // `deviceId` register again into a token that verifies — reproduced end to
+      // end (t33), and exactly the F2/t14 resurrection the comment above claims to
+      // have closed. Only the oldest row that is neither the one just registered
+      // nor revoked is evictable; when nothing qualifies, the table is allowed to
+      // stand above its limit, because a bounded table is not worth losing a
+      // revocation record.
+      const evictable = [...this.rows.values()]
+        .filter((row) => row.id !== id && row.revokedAt === undefined)
+        .sort((a, b) => a.createdAt - b.createdAt)[0]
+      if (evictable === undefined) break
+      this.rows.delete(evictable.id)
     }
     const expiresAt = issuedAt + ttl
     const payload: DeviceGrantPayload = { version: 1, deviceId: id, issuedAt, expiresAt, grantSeq: this.generation }

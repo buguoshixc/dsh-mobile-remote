@@ -509,3 +509,30 @@ test('F5 (t29): an optional time cooldown is available and off by default', () =
   clock += 6000
   assert.ok(gate.request({ toolName: 'terminal.exec' }) !== undefined)
 })
+
+test('t33: table eviction must never drop a revocation record', () => {
+  let clock = 1_000_000
+  const registry = new DeviceRegistry({ secret: SECRET_BYTES, limit: 3, now: () => (clock += 1000) })
+  const a = registry.register('phone-A')
+  registry.register('phone-B')
+  registry.register('phone-C')
+  assert.equal(registry.revoke(a.device.id), true)
+  assert.equal(registry.verify(a.token).code, 'revoked')
+
+  // Push the table past its bound. The revoked row used to be the oldest, so it
+  // was evicted first — which made `isRevoked()` false and let the same id
+  // register into a token that verifies again (t33): the exact F2/t14
+  // resurrection the kernel claims to have closed.
+  registry.register('phone-D')
+  registry.register('phone-E')
+
+  assert.equal(registry.isRevoked(a.device.id), true, 'the revocation record survives eviction')
+  const reissued = registry.register('phone-A-again', { deviceId: a.device.id })
+  assert.equal(
+    registry.verify(reissued.token).code,
+    'revoked',
+    'a revoked id still cannot be resurrected by re-registering after eviction',
+  )
+  // The table is allowed to stand above its limit rather than forget a revocation.
+  assert.ok(registry.devices().length >= 3, 'the table stays usable')
+})

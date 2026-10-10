@@ -182,6 +182,44 @@ function writeJson(res: RouteResponse, status: number, body: string, head: boole
 }
 
 /**
+ * Answer one handler that threw before it could respond.
+ *
+ * A handler owns the whole response lifecycle, so an escaping throw is both an
+ * **unanswered request** (the caller waits out its own timeout) and an unhandled
+ * rejection. The failure is contained here instead: it is audited, answered with a
+ * 500, and a response that was already written is left alone. Nothing about the
+ * error reaches the caller.
+ *
+ * @param audit - the audit sink; its own failure must not mask the answer.
+ * @param req - the request, for the record's method and address facts.
+ * @param res - the response to answer, when it is still unanswered.
+ * @param error - whatever the handler threw.
+ */
+function failRoute(audit: AuditLog, req: RouteRequest, res: RouteResponse, error: unknown): void {
+  const method = (req.method ?? 'GET').toUpperCase()
+  const facts = sourceFacts(req.headers, req.socket?.remoteAddress)
+  try {
+    audit.record({
+      method,
+      path: pathnameOnly(req.url),
+      source: facts.source,
+      socketPeer: facts.socketPeer,
+      viaForwarded: facts.viaForwarded,
+      result: 'internal-error',
+      status: 500,
+      detail: sanitizeError(error, 'route'),
+    })
+  } catch {
+    // An audit sink that throws must not swallow the response below.
+  }
+  try {
+    writeText(res, 500, 'internal error', method === 'HEAD')
+  } catch {
+    // Already answered, or the socket is gone: nothing is left to write.
+  }
+}
+
+/**
  * Build the `/mobile-remote/pair` handler.
  *
  * Decision order, and why:
@@ -447,7 +485,23 @@ export function createDecideHandler(deps: PairRouteDeps): RouteHandler {
       return
     }
 
-    const outcome = approval.answer({ id, t: token, word: target?.searchParams.get('w') })
+    // The decision word is part of the frozen URL (`docs/06-hardening-contract.md`
+    // §5 names `…&w=<word>`). A request without one is **not** an answer, and it
+    // has to be refused *before* `answer()` consumes the one-time capability:
+    // otherwise a link prefetch, a chat-app preview or a hand-truncated URL would
+    // destroy a live approval, settle it `unavailable`, and still report success
+    // on this page (P0, t33). The layer-absent 503 stays ahead of this check,
+    // because that is the order the acceptance sheet pins.
+    // `docs/19-user-acceptance-sheet.md` already documents 400 for a truncated
+    // decide link, so the new refusal class is within the documented behaviour.
+    const word = target?.searchParams.get('w') ?? ''
+    if (word === '') {
+      audit.record({ ...base, result: 'decide-no-word', status: 400 })
+      writeText(res, 400, 'bad request', false)
+      return
+    }
+
+    const outcome = approval.answer({ id, t: token, word })
     if (outcome.code !== 'ok') {
       // Four refusal classes, one answer: no id oracle, no decision content.
       audit.record({ ...base, result: `decide-${outcome.code}`, status: 403 })
@@ -654,7 +708,10 @@ export function createRevokeHandler(deps: PairRouteDeps): RouteHandler {
   }
 
   return (req, res) => {
-    void run(req, res)
+    // The handler owns the response, so a throw must not escape it: `void run()`
+    // discarded the rejection, leaving the caller with a request that never
+    // answered and the process with an unhandled rejection (t33).
+    void run(req, res).catch((error: unknown) => { failRoute(audit, req, res, error) })
   }
 }
 
@@ -771,7 +828,9 @@ export function createRegisterHandler(deps: PairRouteDeps): RouteHandler {
   }
 
   return (req, res) => {
-    void run(req, res)
+    // See the revoke handler: an escaping throw is an unanswered request plus an
+    // unhandled rejection, so it is contained and audited instead (t33).
+    void run(req, res).catch((error: unknown) => { failRoute(audit, req, res, error) })
   }
 }
 
