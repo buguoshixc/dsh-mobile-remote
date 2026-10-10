@@ -19,10 +19,7 @@
  */
 
 import { safeText } from './audit.ts'
-import { isBareAuthority, pairingBaseUrl, type MobileRemoteConfig } from './config.ts'
-
-/** The query parameter the shipped auth handoff reads (`TOKEN_QUERY`). */
-export const TOKEN_QUERY_PARAM = 'token'
+import { pairingBaseUrl } from './config.ts'
 
 /** The port pairing needs from `client-connection`. */
 export interface AuthenticatedUrlPort {
@@ -125,15 +122,6 @@ export function buildPairUrl(port: AuthenticatedUrlPort, authority: string): str
   return port.authenticatedUrl(pairingBaseUrl(authority))
 }
 
-/** The token value carried by a pairing URL, or null when it carries none. */
-export function tokenOf(url: string): string | null {
-  try {
-    return new URL(url).searchParams.get(TOKEN_QUERY_PARAM)
-  } catch {
-    return null
-  }
-}
-
 /**
  * Success result (docs/00-contract.md §4).
  *
@@ -219,14 +207,4 @@ export function renderPairResult(result: PairResult): string {
   // *and* the JSON payload, which would otherwise carry the very same text.
   const message = safeText(result.message ?? result.code ?? 'unknown')
   return [`配对不可用：${message}`, '', JSON.stringify({ ...result, message }, null, 2)].join('\n')
-}
-
-/**
- * Whether the deployment's config makes pairing possible at all.
- *
- * @param config - the resolved config.
- * @returns true when an authority is configured and canonical.
- */
-export function pairingReady(config: MobileRemoteConfig): boolean {
-  return config.pairingAuthority.length > 0 && isBareAuthority(config.pairingAuthority)
 }

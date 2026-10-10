@@ -517,6 +517,14 @@ export function apply(ctx: Context, config: MobileRemoteConfig): void {
       runtimeOf: () => getService('webRuntime'),
     })
     return () => {
+      // The kernel is installed asynchronously (the credential read is a promise),
+      // so it is resolved *here*, at disposal time, rather than captured when this
+      // effect ran. A reload must settle every waiting approval: otherwise the
+      // `wait` promise outlives the fiber that owns it and its timer later fires
+      // into an audit sink whose plugin is already gone (t33). Cancelling before
+      // the routes go away also means a request already in flight cannot spend a
+      // round nobody is waiting for — it answers `denied-unknown-id` instead.
+      securityOf()?.approval.cancelAll()
       disposeRoutes()
     }
   }, 'dsh-mobile-remote: lifetime')

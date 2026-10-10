@@ -17,12 +17,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const decision = await import(pathToFileURL(join(repoRoot, 'src', 'decision.ts')).href)
+const config = await import(pathToFileURL(join(repoRoot, 'src', 'config.ts')).href)
 
 const {
   DECISIONS,
   FALLBACK_DECISION,
   TOKEN_VERSION,
   DEFAULT_TTL_MS,
+  DEFAULT_PENDING_LIMIT,
+  DEFAULT_USED_LIMIT,
   decisionKey,
   normalizeDecision,
   resolveDecision,
@@ -56,6 +59,20 @@ function createStore(options = {}) {
     },
   }
 }
+
+// ── defaults ─────────────────────────────────────────────────────────────────
+
+test('defaults: the store restates the composition defaults, and must stay equal to them', () => {
+  // `decision.ts` owns its own defaults so the store can be used standalone — it
+  // imports nothing but `node:crypto`. The three numbers still have to equal the
+  // frozen config defaults: a link that outlives the wait it answers can only
+  // ever be refused, and a bound that drifts silently changes how many rounds the
+  // pending and replay tables hold. One home for the value (config.ts), one guard
+  // here that notices if either side moves alone.
+  assert.equal(DEFAULT_TTL_MS, config.CONFIG_DEFAULTS.approvalTimeoutMs, 'decision-link lifetime')
+  assert.equal(DEFAULT_PENDING_LIMIT, config.CONFIG_DEFAULTS.pendingLimit, 'pending-round bound')
+  assert.equal(DEFAULT_USED_LIMIT, config.CONFIG_DEFAULTS.usedLimit, 'replay-window bound')
+})
 
 // ── vocabulary ───────────────────────────────────────────────────────────────
 

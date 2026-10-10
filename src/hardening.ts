@@ -13,9 +13,10 @@
  *     (`source` claims loopback while the kernel saw a routable peer, or no
  *     socket peer at all) fails safe **as remote** — a hardening decision may
  *     never take a client-supplied header's word for it.
- *  2. **Dangerous calls need a second pair of eyes**: a tool name under
- *     {@link DEFAULT_RISKY_PREFIXES} called from a remote source must be
- *     confirmed out-of-band. {@link SecondConfirmationGate} implements that by
+ *  2. **Dangerous calls need a second pair of eyes**: a tool name under the
+ *     configured `riskyToolPrefixes` (`docs/06-hardening-contract.md` §4; the
+ *     default list lives in `config.ts`, its single home) called from a remote
+ *     source must be confirmed out-of-band. {@link SecondConfirmationGate} implements that by
  *     opening a normal approval round (so the phone push and the one-time
  *     decision link are the same machinery) and consuming the approval exactly
  *     once.
@@ -28,9 +29,6 @@
 
 import type { ApprovalOutcome, ApprovalService, PendingApproval } from './approval.ts'
 import { headerValue, type AuditHeaderBag, type SourceFacts } from './audit.ts'
-
-/** The prefixes frozen by `docs/06-hardening-contract.md` §4. */
-export const DEFAULT_RISKY_PREFIXES: readonly string[] = ['terminal.', 'credentials.', 'pluginManager.']
 
 /** Header a remote caller uses to present its redeemed confirmation id. */
 export const SECOND_CONFIRMATION_HEADER = 'x-dsmr-confirm'

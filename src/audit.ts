@@ -179,20 +179,6 @@ export function sourceFacts(
   return { source: socketPeer, socketPeer, viaForwarded: false }
 }
 
-/**
- * The request's source address, by the frozen precedence rule.
- *
- * @param headers - request headers.
- * @param socketRemoteAddress - `req.socket.remoteAddress`, when available.
- * @returns the best available source address, or `unknown`.
- */
-export function sourceAddress(
-  headers: AuditHeaderBag | undefined,
-  socketRemoteAddress?: string | undefined,
-): string {
-  return sourceFacts(headers, socketRemoteAddress).source
-}
-
 /** Canonical UUID (v4 in practice): what the audit must be able to *name*. */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 

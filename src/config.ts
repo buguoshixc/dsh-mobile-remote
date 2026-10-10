@@ -70,6 +70,17 @@ export interface MobileRemoteConfig {
   requireSecondConfirmation: boolean
 }
 
+/**
+ * Default approval-wait bound, in milliseconds.
+ *
+ * `docs/00-contract.md` §3 freezes the key *and* this default, and four copies of
+ * the literal is how they stop agreeing: the schema default, the resolved
+ * fallback, the decision-link lifetime and the approval service's own default all
+ * have to be the same number, because a link that outlives its wait can only ever
+ * be answered `unavailable`. This is that number's single home.
+ */
+export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000
+
 /** Schemastery schema for this plugin's composition config. */
 export const Config: Schema<MobileRemoteConfig> = Schema.object({
   pairingAuthority: Schema.string()
@@ -77,7 +88,7 @@ export const Config: Schema<MobileRemoteConfig> = Schema.object({
     .description('手机侧访问用的裸 authority（host 或 host:port，无 scheme、无路径）；空串 = 配对功能关闭'),
   mobileCss: Schema.boolean().default(true).description('窄屏 CSS 总开关；false 时客户端零注入'),
   pushTopic: Schema.string().default('').description('审批推送目标（ntfy 主题/URL）；空串 = 推送子系统静默关闭'),
-  approvalTimeoutMs: Schema.natural().default(120000).description('审批等待上限（毫秒）；超时一律 unavailable（fail closed）'),
+  approvalTimeoutMs: Schema.natural().default(DEFAULT_APPROVAL_TIMEOUT_MS).description('审批等待上限（毫秒）；超时一律 unavailable（fail closed）'),
   auditLog: Schema.boolean().default(true).description('审计总开关；true 时每次命中与拒绝都写一条结构化记录'),
   deviceTableLimit: Schema.natural().default(32).description('设备表上限（进程内存表，不落盘）'),
   deviceGrantTtlMs: Schema.natural().default(2592000000).description('设备凭据默认有效期（毫秒，30 天）'),
@@ -96,7 +107,7 @@ export const CONFIG_DEFAULTS: MobileRemoteConfig = {
   pairingAuthority: '',
   mobileCss: true,
   pushTopic: '',
-  approvalTimeoutMs: 120000,
+  approvalTimeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
   auditLog: true,
   deviceTableLimit: 32,
   deviceGrantTtlMs: 2592000000,

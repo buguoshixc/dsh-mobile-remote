@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 
-import { redact } from '../src/audit.ts'
+import { AuditLog, redact } from '../src/audit.ts'
 import { DeviceRegistry, deviceKey, signDeviceGrant } from '../src/device.ts'
 import {
   classifySource,
@@ -23,7 +23,7 @@ import {
   SecondConfirmationGate,
 } from '../src/hardening.ts'
 import { apply } from '../src/index.ts'
-import { deviceCookieName } from '../src/routes.ts'
+import { deviceCookieName, registerMobileRoutes } from '../src/routes.ts'
 import { ApprovalService } from '../src/approval.ts'
 
 const AUTHORITY = 'demo.tailnet-example.ts.net'
@@ -558,4 +558,154 @@ test('t33: table eviction must never drop a revocation record', () => {
   )
   // The table is allowed to stand above its limit rather than forget a revocation.
   assert.ok(registry.devices().length >= 3, 'the table stays usable')
+})
+
+test('t33: the audit ring is bounded, off means silent, and its view is a copy', () => {
+  const lines = []
+  const audit = new AuditLog({ enabled: true, sink: (line) => lines.push(line), limit: 3 })
+  for (let i = 0; i < 5; i += 1) {
+    audit.record({ method: 'get', path: `/mobile-remote/state?i=${i}`, result: 'ok', source: '127.0.0.1', status: 200 })
+  }
+
+  const recent = audit.entries()
+  assert.equal(lines.length, 5, 'every record reaches the sink, bounded view or not')
+  assert.equal(recent.length, 3, 'the ring holds at most `limit` records')
+  assert.equal(recent[0].method, 'GET', 'the method is upper-cased in the record')
+  assert.equal(recent[0].path, '/mobile-remote/state', 'no query string reaches the record')
+
+  // The accessor documents a copy; mutating what it returns must not reach the ring.
+  recent.length = 0
+  assert.equal(audit.entries().length, 3, 'a caller cannot shorten the buffer through the view')
+
+  // `auditLog: false` writes nothing at all — neither to the sink nor to the ring.
+  const off = new AuditLog({ enabled: false, sink: () => { throw new Error('the sink must not be called') } })
+  assert.equal(off.record({ method: 'GET', path: '/x', result: 'ok', source: '127.0.0.1' }), undefined)
+  assert.equal(off.entries().length, 0)
+})
+
+test('t33: register hands back a copy of the row, not the live table entry', () => {
+  const registry = new DeviceRegistry({ secret: SECRET_BYTES, now: () => 1_000_000 })
+  const issued = registry.register('phone-A')
+
+  // The returned object used to *be* the row, so this mutated the table without
+  // going through `revoke()`/`unrevoke()` — the two audited paths that are the
+  // only sanctioned ways those fields change.
+  issued.device.revokedAt = 1_234_567
+  issued.device.label = 'tampered'
+
+  assert.equal(registry.isRevoked(issued.device.id), false, 'a caller cannot revoke through the returned object')
+  assert.equal(registry.devices()[0].label, 'phone-A', 'nor rename the row')
+  assert.equal(registry.verify(issued.token).ok, true, 'and the grant is untouched')
+})
+
+test('t33: a disposed kernel settles every waiting approval as unavailable', async () => {
+  const approval = new ApprovalService({ secret: SECRET_BYTES, timeoutMs: 60_000 })
+  const first = approval.ask({ summary: 'one' })
+  const second = approval.ask({ summary: 'two' })
+  assert.equal(approval.pending().length, 2)
+
+  assert.equal(approval.cancelAll(), 2)
+  assert.equal(approval.pending().length, 0, 'no waiter is left behind')
+  for (const outcome of await Promise.all([first.wait, second.wait])) {
+    assert.equal(outcome.code, 'unavailable', 'a teardown is never an answer')
+    assert.equal(outcome.word, 'unavailable', 'and never a grant')
+  }
+  assert.equal(approval.cancelAll(), 0, 'settling twice is a no-op')
+
+  // The capability dies with the kernel: the link cannot decide anything afterwards.
+  assert.notEqual(approval.answer({ id: first.pending.id, t: first.pending.token, word: 'allow' }).code, 'ok')
+})
+
+test('t33: a partial route-registration failure releases the routes already claimed', () => {
+  const claimed = []
+  const released = []
+  let calls = 0
+  const webServer = {
+    register(route) {
+      calls += 1
+      if (calls === 3) throw new Error(`webserver: duplicate exact route "${route.path}"`)
+      claimed.push(route.path)
+      return () => released.push(route.path)
+    },
+  }
+  const deps = { configOf: () => ({}), getService: () => undefined, audit: { record: () => {} } }
+
+  // The throw happens before `registerMobileRoutes` can return a disposer, so the
+  // routes claimed before it would otherwise stay owned by a mount that failed —
+  // and the shipped table refuses a duplicate `(kind, path)`, so the next mount
+  // would fail on a route nobody owns.
+  assert.throws(() => registerMobileRoutes({ webServer }, deps), /duplicate exact route/)
+  assert.deepEqual(claimed, ['/mobile-remote/pair', '/mobile-remote/decide'])
+  assert.deepEqual(released, ['/mobile-remote/decide', '/mobile-remote/pair'], 'released newest first')
+})
+
+test('routes: a caller-supplied device id is bounded on both routes that read one', async () => {
+  const harness = mount()
+  await settle()
+
+  const atLimit = 'd'.repeat(128)
+  const accepted = await harness.request({
+    method: 'POST',
+    url: '/mobile-remote/device/register',
+    headers: {},
+    body: JSON.stringify({ deviceId: atLimit }),
+  })
+  assert.equal(accepted.status, 200, 'the bound itself is inclusive')
+
+  const overLimit = 'd'.repeat(129)
+  const refused = await harness.request({
+    method: 'POST',
+    url: '/mobile-remote/device/register',
+    headers: {},
+    body: JSON.stringify({ deviceId: overLimit }),
+  })
+  assert.equal(refused.status, 400)
+  assert.equal(refused.body, 'bad request')
+  assert.equal(refused.headers['set-cookie'], undefined, 'a refused id issues no grant')
+  assert.ok(harness.auditRecords().some((record) => record.result === 'bad-request'))
+
+  // The same bound applies where the id is used as a lookup key.
+  const revoke = await harness.request({
+    method: 'POST',
+    url: '/mobile-remote/device/revoke',
+    headers: {},
+    body: JSON.stringify({ deviceId: overLimit }),
+  })
+  assert.equal(revoke.status, 400, 'an oversized key is a bad request, not a lookup miss')
+
+  // Nothing oversized reached the table: the accepted registration is the only row.
+  const state = JSON.parse((await harness.request({ url: '/mobile-remote/state', headers: {} })).body)
+  assert.deepEqual(state.devices.map((device) => device.id), [atLimit])
+})
+
+test('O-R2-1: a suppressed round mints nothing, and an unanswered id is never consumable', async () => {
+  const approval = new ApprovalService({ secret: SECRET_BYTES, timeoutMs: 60_000 })
+  const gate = new SecondConfirmationGate(approval, { maxPendingRounds: 1 })
+
+  const live = gate.request({ toolName: 'pluginManager.device.revoke' })
+  assert.ok(live !== undefined)
+  assert.equal(approval.pending().length, 1)
+
+  // Suppression has to be side-effect free: no round handed out, no pending row
+  // created, and the live round left exactly as it was. The review recorded this
+  // ("上限生效 + 抑制不铸轮") as pinned only by its own probe; this is the
+  // host-side regression case for it.
+  assert.equal(gate.request({ toolName: 'pluginManager.device.revoke' }), undefined)
+  assert.equal(gate.request({ toolName: 'pluginManager.device.revoke' }), undefined)
+  assert.equal(approval.pending().length, 1, 'suppression mints no approval request')
+  assert.equal(gate.openRounds(), 1, 'and leaves exactly the live round open')
+  assert.equal(gate.throttledCount(), 2, 'each refusal is counted')
+
+  // An unanswered round is not a confirmation, however it is presented.
+  assert.equal(gate.isApproved(live.id), false)
+  assert.equal(gate.consume(live.id), false, 'an unanswered id can never be spent')
+
+  // Answered `allow`: consumable exactly once, then the table has drained.
+  approval.answer({ id: live.id, t: live.pending.token, word: 'allow' })
+  assert.equal(await live.wait, true)
+  assert.equal(gate.isApproved(live.id), true)
+  assert.equal(gate.consume(live.id), true)
+  assert.equal(gate.consume(live.id), false, 'one-time, even for an approved round')
+  assert.equal(approval.pending().length, 0)
+  assert.ok(gate.request({ toolName: 'pluginManager.device.revoke' }) !== undefined, 'minting resumes once the table drains')
 })

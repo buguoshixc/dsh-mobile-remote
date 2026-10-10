@@ -334,3 +334,27 @@ round-1（本文 §6 F3）给的是"要么恒返 `notes: []`，要么把 `notes`
 - **R2/R3**：未读写 `profiles\desktop\**`、未动 `D:\DSHD\**`、未改前端 dist 与 DSH 源码。
 - **R4**：未新增任何常驻 HTTP 服务（本轮临时 server 绑定 `127.0.0.1:0` 并已关闭）。
 - **R5**：未修改 `src/**`、`test/**`；本任务交付物仍只写 `docs/09-review-host-core.md`（本段为 append-only 追加），探针写在 `_harness\t11\probes\`（t11 自己的证据目录）。
+
+## 12. 追补更正（2026-10-10 晚，append-only）：§2.6 引用的 `sourceAddress()` 已不存在
+
+> **本节只追加。** 本文 §0–§11 的**原文一字未改**；凡本节与前文冲突，**以本节为准**，前文旧表述按项目约定保留为历史记录（`docs/00-contract.md:5`）。代码侧的全量记录见 `docs/29-post-t33-host-cleanup.md`（§2 的死代码清单、§3.1 的前导合并）。
+
+**要更正的句子**：§2.6（本文 `:123`）写着"源码侧 `sourceAddress()` 的唯一消费者是审计记录（`src/routes.ts:130` → `audit.record`）"。
+
+**现读数**：
+
+- `sourceAddress` 这个符号**已不存在**：它是 `sourceFacts(headers, socket).source` 的一行包装、**全仓零调用**，已作为死代码移除。
+
+  ```powershell
+  Select-String -Path src\*.ts -Pattern 'sourceAddress'   # 期望：无输出
+  ```
+
+- 真正把来源喂进审计的是 **`sourceFacts()`**（`src/audit.ts`），而且调用点已经**合并为一处**：`src/routes.ts` 里 `requestContext()` 的那一句，五条路由与 `failRoute` 共用（六处调用点）。
+
+  ```powershell
+  Select-String -Path src\routes.ts -Pattern 'sourceFacts\('   # 期望：1 处（requestContext 内）
+  ```
+
+**§2.6 的实质结论不变**（这比符号名重要）：XFF 只写进审计的 `source`，**不参与**认证授权；伪造 `X-Forwarded-For: 127.0.0.1` 仍是 401。该实测是本文当时的读数，本轮**未复跑**（裸 socket 复跑属 `docs/19` 的真机范围）。
+
+**本节边界**：只追加；`src/**` 的改动记录在 `docs/29`，本节不复制其内容；本文件保持 UTF-8 无 BOM。

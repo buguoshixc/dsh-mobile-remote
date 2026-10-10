@@ -26,11 +26,13 @@ import { createHash } from 'node:crypto'
 
 import {
   type AuditHeaderBag,
+  type AuditInput,
   type AuditLog,
   headerValue,
   pathnameOnly,
   sanitizeError,
   sourceFacts,
+  type SourceFacts,
 } from './audit.ts'
 import type { ApprovalService } from './approval.ts'
 import { isBareAuthority, isPairingConfigured, type MobileRemoteConfig } from './config.ts'
@@ -54,6 +56,17 @@ export const STATE_ROUTE_PATH = '/mobile-remote/state'
 export const REVOKE_ROUTE_PATH = '/mobile-remote/device/revoke'
 /** Device-grant issuance (P4); operator-only (fence admission). */
 export const REGISTER_ROUTE_PATH = '/mobile-remote/device/register'
+
+/**
+ * Longest device id a caller may name, in characters.
+ *
+ * The plugin mints `randomUUID()` (36 characters), and every id it accepts becomes
+ * a key in the device table *and* an audit `detail`. The field used to be bounded
+ * only by the request-body cap, so a caller admitted by the fence could key the
+ * table with a 64 KiB string (× the table limit of 32 rows). One bound, shared by
+ * the two routes that read an id from a caller.
+ */
+const DEVICE_ID_LIMIT = 128
 
 /** Request facts this module reads (structurally satisfied by `http.IncomingMessage`). */
 export interface RouteRequest {
@@ -196,15 +209,10 @@ function writeJson(res: RouteResponse, status: number, body: string, head: boole
  * @param error - whatever the handler threw.
  */
 function failRoute(audit: AuditLog, req: RouteRequest, res: RouteResponse, error: unknown): void {
-  const method = (req.method ?? 'GET').toUpperCase()
-  const facts = sourceFacts(req.headers, req.socket?.remoteAddress)
+  const { method, base } = requestContext(req)
   try {
     audit.record({
-      method,
-      path: pathnameOnly(req.url),
-      source: facts.source,
-      socketPeer: facts.socketPeer,
-      viaForwarded: facts.viaForwarded,
+      ...base,
       result: 'internal-error',
       status: 500,
       detail: sanitizeError(error, 'route'),
@@ -216,6 +224,37 @@ function failRoute(audit: AuditLog, req: RouteRequest, res: RouteResponse, error
     writeText(res, 500, 'internal error', method === 'HEAD')
   } catch {
     // Already answered, or the socket is gone: nothing is left to write.
+  }
+}
+
+/**
+ * The per-request preamble every route needs, in one place.
+ *
+ * Five handlers used to spell this out, which made one correctness property look
+ * like boilerplate: `sourceFacts` is consulted **exactly once** per request, and
+ * both halves of the source story (`source`, and the `socketPeer` a remote caller
+ * cannot forge) always travel together into the record. A hardening decision must
+ * never have to trust a client-supplied header alone (F4), and the way that stays
+ * true is that no caller of this helper can pick one half without the other.
+ *
+ * @param req - the incoming request.
+ * @returns the upper-cased method, the pathname, the source facts, and the audit
+ *   base that carries method, path and both halves.
+ */
+function requestContext(req: RouteRequest): {
+  method: string
+  path: string
+  facts: SourceFacts
+  base: Omit<AuditInput, 'result' | 'status' | 'detail'>
+} {
+  const method = (req.method ?? 'GET').toUpperCase()
+  const path = pathnameOnly(req.url)
+  const facts = sourceFacts(req.headers, req.socket?.remoteAddress)
+  return {
+    method,
+    path,
+    facts,
+    base: { method, path, source: facts.source, socketPeer: facts.socketPeer, viaForwarded: facts.viaForwarded },
   }
 }
 
@@ -239,19 +278,10 @@ export function createPairHandler(deps: PairRouteDeps): RouteHandler {
   const { configOf, getService, audit } = deps
 
   return (req, res) => {
-    const method = (req.method ?? 'GET').toUpperCase()
-    const head = method === 'HEAD'
-    const path = pathnameOnly(req.url)
-    const facts = sourceFacts(req.headers, req.socket?.remoteAddress)
     // Every record carries both halves of the source story, so a later hardening
     // decision (T9/P4) never has to trust a client-supplied header alone (F4).
-    const base = {
-      method,
-      path,
-      source: facts.source,
-      socketPeer: facts.socketPeer,
-      viaForwarded: facts.viaForwarded,
-    }
+    const { method, base } = requestContext(req)
+    const head = method === 'HEAD'
 
     const connection = getService('connection')
     if (!isAdmitter(connection)) {
@@ -458,10 +488,7 @@ export function createDecideHandler(deps: PairRouteDeps): RouteHandler {
   const { audit, approvalOf } = deps
 
   return (req, res) => {
-    const method = (req.method ?? 'GET').toUpperCase()
-    const path = pathnameOnly(req.url)
-    const facts = sourceFacts(req.headers, req.socket?.remoteAddress)
-    const base = { method, path, source: facts.source, socketPeer: facts.socketPeer, viaForwarded: facts.viaForwarded }
+    const { method, base } = requestContext(req)
 
     if (method !== 'GET') {
       audit.record({ ...base, result: 'method-not-allowed', status: 405 })
@@ -530,11 +557,8 @@ export function createStateHandler(deps: PairRouteDeps): RouteHandler {
   const { configOf, audit, approvalOf, devicesOf } = deps
 
   return (req, res) => {
-    const method = (req.method ?? 'GET').toUpperCase()
+    const { method, base } = requestContext(req)
     const head = method === 'HEAD'
-    const path = pathnameOnly(req.url)
-    const facts = sourceFacts(req.headers, req.socket?.remoteAddress)
-    const base = { method, path, source: facts.source, socketPeer: facts.socketPeer, viaForwarded: facts.viaForwarded }
     const config = configOf()
     const authority = config.pairingAuthority
     const cookieName = isPairingConfigured(config) && isBareAuthority(authority) ? deviceCookieName(authority) : ''
@@ -602,10 +626,7 @@ export function createRevokeHandler(deps: PairRouteDeps): RouteHandler {
   const { configOf, audit, devicesOf, gateOf } = deps
 
   const run = async (req: RouteRequest, res: RouteResponse): Promise<void> => {
-    const method = (req.method ?? 'GET').toUpperCase()
-    const path = pathnameOnly(req.url)
-    const facts = sourceFacts(req.headers, req.socket?.remoteAddress)
-    const base = { method, path, source: facts.source, socketPeer: facts.socketPeer, viaForwarded: facts.viaForwarded }
+    const { method, facts, base } = requestContext(req)
     const config = configOf()
     const authority = config.pairingAuthority
     const cookieName = isPairingConfigured(config) && isBareAuthority(authority) ? deviceCookieName(authority) : ''
@@ -702,7 +723,7 @@ export function createRevokeHandler(deps: PairRouteDeps): RouteHandler {
     }
 
     const deviceId = record['deviceId']
-    if (typeof deviceId !== 'string' || deviceId.length === 0) {
+    if (typeof deviceId !== 'string' || deviceId.length === 0 || deviceId.length > DEVICE_ID_LIMIT) {
       audit.record({ ...base, result: 'bad-request', status: 400 })
       writeText(res, 400, 'bad request', false)
       return
@@ -740,10 +761,7 @@ export function createRegisterHandler(deps: PairRouteDeps): RouteHandler {
   const { configOf, audit, devicesOf } = deps
 
   const run = async (req: RouteRequest, res: RouteResponse): Promise<void> => {
-    const method = (req.method ?? 'GET').toUpperCase()
-    const path = pathnameOnly(req.url)
-    const facts = sourceFacts(req.headers, req.socket?.remoteAddress)
-    const base = { method, path, source: facts.source, socketPeer: facts.socketPeer, viaForwarded: facts.viaForwarded }
+    const { method, facts, base } = requestContext(req)
     const config = configOf()
     const authority = config.pairingAuthority
     const cookieName = isPairingConfigured(config) && isBareAuthority(authority) ? deviceCookieName(authority) : ''
@@ -795,6 +813,15 @@ export function createRegisterHandler(deps: PairRouteDeps): RouteHandler {
         return
       }
     }
+    // The id arrives from the caller and becomes a table key plus an audit
+    // `detail`, so it is bounded like every other caller-supplied field (the
+    // comment below explains why a reissue is honoured at all). `admission.deviceId`
+    // is this plugin's own verified grant id and needs no such check.
+    if (deviceId !== undefined && deviceId.length > DEVICE_ID_LIMIT) {
+      audit.record({ ...base, result: 'bad-request', status: 400 })
+      writeText(res, 400, 'bad request', false)
+      return
+    }
     if (admission.via === 'device') deviceId = admission.deviceId
 
     // F2 (t29): re-registering a **revoked** device id must not resurrect it.
@@ -843,29 +870,6 @@ export function createRegisterHandler(deps: PairRouteDeps): RouteHandler {
   }
 }
 
-/**
- * Register the route on the host webserver and return its disposer.
- *
- * @param ctx - the plugin context (only `webServer` is read).
- * @param deps - route dependencies.
- * @returns the disposer removing the route; a no-op when no webserver is present.
- */
-export function registerPairRoute(
-  ctx: unknown,
-  deps: PairRouteDeps,
-): () => void {
-  const webServer = (ctx as { webServer?: WebServerLike } | null | undefined)?.webServer
-  if (webServer === undefined || typeof webServer.register !== 'function') return () => {}
-  const dispose = webServer.register({
-    kind: 'exact',
-    path: PAIR_ROUTE_PATH,
-    handler: createPairHandler(deps),
-  })
-  return () => {
-    if (typeof dispose === 'function') dispose()
-  }
-}
-
 /** One exact route plus its handler. */
 interface RouteSpec {
   path: string
@@ -897,14 +901,21 @@ export function registerMobileRoutes(ctx: unknown, deps: PairRouteDeps): () => v
   if (webServer === undefined || typeof webServer.register !== 'function') return () => {}
 
   const disposers: Array<() => void> = []
-  for (const spec of ROUTE_SPECS) {
-    const dispose = webServer.register({ kind: 'exact', path: spec.path, handler: spec.handler(deps) })
-    if (typeof dispose === 'function') disposers.push(dispose)
+  try {
+    for (const spec of ROUTE_SPECS) {
+      const dispose = webServer.register({ kind: 'exact', path: spec.path, handler: spec.handler(deps) })
+      if (typeof dispose === 'function') disposers.push(dispose)
+    }
+  } catch (error) {
+    // A partial failure must not leave half the surface claimed. This function
+    // throws before it can return a disposer, so the routes registered so far
+    // would stay owned by a failed mount — and because the shipped table refuses
+    // a duplicate `(kind, path)`, the *next* mount would fail on a route nobody
+    // owns. Release them here, then let the mount failure stay loud.
+    for (const dispose of disposers.reverse()) dispose()
+    throw error
   }
   return () => {
     for (const dispose of disposers.reverse()) dispose()
   }
 }
-
-/** The routes this plugin registers, for diagnostics and tests. */
-export const ROUTE_PATHS: readonly string[] = ROUTE_SPECS.map((spec) => spec.path)

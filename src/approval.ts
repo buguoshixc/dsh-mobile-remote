@@ -17,6 +17,7 @@
  * @module dsh-mobile-remote/approval
  */
 
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from './config.ts'
 import {
   DecisionStore,
   FALLBACK_DECISION,
@@ -27,9 +28,6 @@ import {
 
 /** Audit/log event name for one approval trip. */
 export const APPROVAL_EVENT = 'mobile-remote/approval'
-
-/** Default decision-link lifetime; equals the contract's `approvalTimeoutMs`. */
-export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000
 
 /** One pending approval, as the phone/push/GUI surfaces it. */
 export interface PendingApproval {
@@ -196,6 +194,29 @@ export class ApprovalService {
     return true
   }
 
+  /**
+   * Settle every waiting round `unavailable` and clear its timer.
+   *
+   * Called when the owning fiber is disposed (a profile recomposition reloads
+   * `apply`): a `wait` promise must not outlive the fiber that owns it, and its
+   * timer must not fire later into an audit sink whose plugin is already gone.
+   * `unavailable` is the fail-closed word, so a teardown can never be mistaken
+   * for an answer; the pending rows die with the kernel, so none is left to
+   * replay either.
+   *
+   * @returns how many rounds were settled.
+   */
+  cancelAll(): number {
+    const open = [...this.waiters.values()]
+    this.waiters.clear()
+    for (const waiter of open) {
+      this.clearTimer(waiter.timer)
+      this.onEvent({ id: waiter.pending.id, result: 'disposed', word: FALLBACK_DECISION })
+      waiter.settle({ id: waiter.pending.id, word: FALLBACK_DECISION, code: 'unavailable' })
+    }
+    return open.length
+  }
+
   /** Pending rows, oldest first (no tokens except in `token`). */
   pending(): readonly PendingApproval[] {
     return [...this.waiters.values()].map((waiter) => waiter.pending)
@@ -214,27 +235,3 @@ export class ApprovalService {
   }
 }
 
-/**
- * Build one `approval/request` waterfall listener.
- *
- * The listener returns `next()` for anything it does not own, so a later
- * responder (or the shipped policy) still gets its turn; when it does own the
- * request it pushes and awaits the decision, and a timeout is `unavailable`.
- */
-export function approvalWaterfallListener(
-  service: ApprovalService,
-  options: {
-    /** Whether this plugin should answer this request at all. */
-    eligible?: (request: unknown) => boolean
-    /** Map a request to the display context for the pending row. */
-    describe?: (request: unknown) => { summary?: string; subject?: string }
-  } = {},
-): (request: unknown, next: () => unknown) => unknown {
-  const eligible = options.eligible ?? (() => true)
-  const describe = options.describe ?? (() => ({}))
-  return (request: unknown, next: () => unknown) => {
-    if (!eligible(request)) return next()
-    const { wait } = service.ask(describe(request))
-    return wait.then((outcome) => outcome.word)
-  }
-}

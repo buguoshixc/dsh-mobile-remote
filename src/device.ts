@@ -183,7 +183,11 @@ export class DeviceRegistry {
     }
     const expiresAt = issuedAt + ttl
     const payload: DeviceGrantPayload = { version: 1, deviceId: id, issuedAt, expiresAt, grantSeq: this.generation }
-    return { device, token: signDeviceGrant(this.key, payload), expiresAt }
+    // The row stays in the table; the caller gets a copy, exactly as `verify()`
+    // does. Handing out the live object let a caller mutate `revokedAt` or
+    // `label` without going through `revoke()`/`unrevoke()` — the two audited
+    // paths that are supposed to be the only way those fields change.
+    return { device: { ...device }, token: signDeviceGrant(this.key, payload), expiresAt }
   }
 
   /**

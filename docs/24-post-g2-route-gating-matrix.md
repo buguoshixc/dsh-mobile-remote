@@ -480,3 +480,42 @@ curl.exe -s -o NUL -w '%{http_code}' -H 'Host: evil.example.com' "http://127.0.0
 **本节边界**：本节**只追加**（写在末尾）；`docs/00-contract.md`、`docs/06-hardening-contract.md`、`docs/09`–`docs/12`、`docs/26`、`docs/27`、`src/**`、`lib/**`、`test/**`、`tools/**` **一律未改**；`docs/28-review-final-doc-deltas.md` **只在末尾追加**了「账目收口」一节（其 §10，见该节末行自述），正文一字未改；本文 §1–§8 与附录 A/B **一字未改**；本文件保持 UTF-8 无 BOM。
 
 **追加性可核**（本节写作时刻，仓库 `HEAD` = `0f08700`）：`git diff --numstat -- docs/24-post-g2-route-gating-matrix.md` → **`87  0`**（仅新增、**0 行删除**）⇒ 与"§1–§8 与附录 A/B 一字未改"自述一致（该命令可随时复跑；若此后又被追加，新增数会变大，但**删除数应恒为 0**）。
+
+## 附录 D · 追补更正（2026-10-10 晚，append-only）：§1.2 的 `ROUTE_PATHS` 已移除 + 附录 C.4 关闭
+
+> **本节只追加**（写在末尾）。本文 §1–§8 与附录 A/B/C **一字未改**；凡本节与前文冲突，**以本节为准**，前文旧表述按项目约定保留为历史记录（`docs/00-contract.md:5`、`:974-975`）。代码侧全量记录见 `docs/29-post-t33-host-cleanup.md`。
+
+### D.1 §1.2（本文 `:38`）的"导出面 `ROUTE_PATHS`"已不存在
+
+- **原文**："`ROUTE_SPECS`（`src/routes.ts:808-814`）是运行时唯一的路由来源，导出面 `ROUTE_PATHS`（`:842`）与之一致；`registerMobileRoutes`（`:827-839`）逐条 `webServer.register({kind:'exact', …})`（`:833`），**没有** `prefix` 注册、**没有** `registerFallback`（与 `docs/00-contract.md:547` 的"不得"一致）。"
+- **现读数**：`ROUTE_PATHS` **已移除**——它零消费者，而"恰好五条路由"这一事实**已被两条测试各自逐条钉住**（`test/host-pair.test.mjs` 与被验收套件 `test/acceptance-hardening.test.mjs` 都列出了五个路径），该导出只是**第三份**冗余清单（理由与旁证见 `docs/29` §2）。
+- **这句现在要读成**：`ROUTE_SPECS` 仍是运行时唯一的路由来源（**不变**，也是本文反表要证的东西），但它**没有导出面**了；`registerMobileRoutes` 逐条 `register({kind:'exact', …})`、**没有** `prefix`、**没有** `registerFallback`——这三条**仍然成立**（本批还给它加了一条"半途失败即释放已注册项"的处置，`docs/29` §3.3）。
+- **行号已整体后移**（本文 `:38` 给的 `:808-814`/`:842`/`:827-839` 是**当时的**读数）——按本项目纪律**不要背行号，用 `Pattern`**：
+
+  ```powershell
+  Select-String -Path src\routes.ts -Pattern 'ROUTE_SPECS'            # 定义 + 供 registerMobileRoutes 循环
+  Select-String -Path src\routes.ts -Pattern 'registerMobileRoutes'   # 定义（+ src\index.ts 的调用点）
+  Select-String -Path src\*.ts -Pattern 'ROUTE_PATHS'                 # 期望：无输出
+  ```
+
+### D.2 附录 C.4 关闭：那两处是**引用错误**，不是漂移
+
+C.4 登记的两处 `docs/06` 引用（`:104` 现为 `:112`；`:134` 前半落空）此前写着"**成因未能从仓库内证据判定**"。**现在补上判定**：
+
+| 证据 | 读数 | 含义 |
+|---|---|---|
+| `git log --oneline -- docs/06-hardening-contract.md` | 只有 `5725b1e`（根提交） | 该文件在仓库历史里**从未被改过** |
+| `git log --numstat -- docs/06-hardening-contract.md` | `242  0` | **整体**入库，**0 行删除** |
+| `git cat-file -s HEAD:docs/06-hardening-contract.md` vs 工作区字节数 | `30314` = `30314`（`git status` 干净） | HEAD 与工作区**逐字节相同** ⇒ 行号一致 |
+| `Select-String -Path docs\06-hardening-contract.md -Pattern '四类失败同一响应'` | **112** | 引用方给的 `:104` **当时就是错的** |
+| `docs/06` 的 mtime `2026-10-10 04:44:39` 早于本文的探测窗口（`10:11–10:21`，本文自述） | — | 写本文 §5 时读到的**就是现在这套编号** |
+
+⇒ **C.4 关闭**：**没有任何仓库内版本**把那段文本放在 `:104`；这两处是**写作时的引用笔误**，**不是**"`docs/06` 被就地改"造成的漂移。（C.3 处理的 `docs/00` 漂移是**另一回事**，不受本节影响。）
+
+### D.3 本节的追加性可核
+
+```powershell
+git diff --numstat -- docs/24-post-g2-route-gating-matrix.md   # 期望：删除数恒为 0（本节只增不删）
+```
+
+**本节边界**：只追加；`src/**`、`lib/**`、`test/**` 的改动记录在 `docs/29`，本节不复制；`docs/09` 的同批更正写在 `docs/09` §12（同样只追加）；本文件保持 UTF-8 无 BOM。
