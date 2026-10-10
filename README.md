@@ -1,5 +1,8 @@
 # dsh-mobile-remote
 
+[![CI](https://github.com/buguoshixc/dsh-mobile-remote/actions/workflows/ci.yml/badge.svg)](https://github.com/buguoshixc/dsh-mobile-remote/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Reach the desktop DeepSeek Harness Web GUI from an **Android phone over Tailscale** — without copying an auth token by hand.
 
 The plugin runs inside the existing DSH Web composition (`127.0.0.1:19387` keeps
@@ -18,24 +21,82 @@ binding loopback only; Tailscale `serve` is what exposes it to the tailnet):
 
 ## Status
 
-T2 scaffold: package/build pipeline, identity, frozen `Config`, and a mountable
-host plugin row. Business logic lands next (`src/config.ts`, `src/pair.ts`,
-`src/routes.ts`, `src/tools.ts`, `src/client/**`).
+Implemented and under test. Both halves are complete — the host half (pairing
+routes, device registry, approval decisions, audit, hardening, agent tools), the
+browser half (mobile panel, QR pairing card, narrow-screen stylesheet), and the
+test bench that drives host code without touching a live DSH process.
 
-The frozen interface contract lives in [`docs/00-contract.md`](docs/00-contract.md);
-the isolated test bench used to exercise host code without touching the live DSH
-process is documented in [`docs/02-harness.md`](docs/02-harness.md).
+Nine `node --test` suites cover the contract and the hardening model; the CI badge
+above reports the current state on both supported Node lines.
+
+**Implementation-complete is not the same as device-verified.** The plugin runs
+against a real DSH Web composition, but several acceptance items can only be
+closed on real hardware and are *not* claimed as verified:
+
+| Not verified | Why |
+|---|---|
+| Terminal / plugin toggle / session switch / settings **on a phone** | The desktop-side run only reached the transport layer (with a session cookie, `POST /api` answers `404`, not `401` ⇒ the fence admitted it). The four interfaces themselves were never exercised on a device. |
+| **Narrow-screen rendering** | Every layout reading comes from headless Chromium plus a synthetic DOM. Android WebView font scaling, `dvh`/`svh` behaviour and touch-hit testing are unmeasured. |
+| **Push delivery** | `pushTopic` ships empty, which disables the push subsystem by choice, so there is no delivery to verify. |
+| Revocation drill steps that need a restart / are destructive | Rotating the `browser-session` secret and the profile restore are documented but were never executed. |
+
+[`docs/19-user-acceptance-sheet.md`](docs/19-user-acceptance-sheet.md) is the
+runnable acceptance checklist and carries the authoritative verified / not-verified
+split; it cites every number it quotes.
 
 ## Layout
 
 | Path | Role |
 |---|---|
 | `src/index.ts` | Host half: `name` / `inject` / `Config` / `apply` |
+| `src/routes.ts` | The five frozen routes (R1–R5) and their admission order |
+| `src/pair.ts` · `src/tools.ts` | Pairing-URL issuance; the `mobile_pair_url` agent tool |
+| `src/device.ts` · `src/decision.ts` · `src/approval.ts` | Device registry, approval decisions, phone-side approval flow |
+| `src/audit.ts` · `src/hardening.ts` | Audit trail; forwarded-header reasoning and the local-vs-remote gate |
+| `src/config.ts` | Frozen `schemastery` `Config` |
 | `src/client/index.ts` | Browser half entry (`lib/client.js`), `inject = ['slots']` |
+| `src/client/pair-card.ts` · `pair-state.ts` · `qr.ts` | Sidebar pairing card, its state machine, QR encoding |
+| `src/client/mobile-css.ts` · `styles.ts` | Narrow-screen stylesheet and the `visualViewport` keyboard-avoidance route |
 | `cordis.patch.yml` | Bundle patch layer: one `insert` row naming this package |
-| `test/host-scaffold.test.mjs` | `node --test`: identity, Config defaults, YAML shape, artifacts |
 | `lib/index.js` | Built host artifact (ESM) |
 | `lib/client.js` | Built browser artifact (`window.__ModuleLoader__.load({ id: "dsh-mobile-remote", … })`) |
+
+### Tests
+
+| Suite | Covers | Needs `lib/`? |
+|---|---|---|
+| `host-scaffold` | Identity, `Config` defaults, patch YAML shape, artifact handshake | yes |
+| `host-pair` | R1 pairing URL and the admission fence | yes |
+| `host-device` | R3/R4/R5 registration, revocation, rotation, the local-vs-remote gate | no |
+| `host-decision` · `host-approval` | One-shot signed decision links; the approval flow | no |
+| `client-pair` · `client-mobile-css` | Pairing card state machine; injected CSS and selector matching | yes |
+| `acceptance-t6` · `acceptance-hardening` | Acceptance runs over the host surface and the hardening model | yes |
+
+Suites marked **no** import `../src/*.ts` directly and use Node's type stripping,
+so they exercise the code you edit with no build step. The rest read the built
+`lib/` artifacts — some to assert 200-level behaviour against the real bundle,
+others merely to pin the ESM/`__ModuleLoader__` handshake. So build first:
+`pnpm test` alone fails on a fresh clone, while `pnpm verify` runs
+typecheck → build → test in that order.
+
+## Documentation
+
+`docs/` is 31 files because it is a working record, not just a spec: the frozen
+contract, the harness notes, and then a series of verification and review rounds
+that cite raw evidence. To find your way in:
+
+| Read | For |
+|---|---|
+| [`docs/00-contract.md`](docs/00-contract.md) | **Start here.** The frozen interface contract: assumptions, the five routes, the risk register, and every later wording correction with its evidence |
+| [`docs/19-user-acceptance-sheet.md`](docs/19-user-acceptance-sheet.md) | What to run, what to expect, what to send back — and the verified / not-verified split |
+| [`docs/04-install-and-transport.md`](docs/04-install-and-transport.md) | Installing into a profile, what needs a restart and what does not, teardown |
+| [`docs/06-hardening-contract.md`](docs/06-hardening-contract.md) · [`docs/08-revocation-runbook.md`](docs/08-revocation-runbook.md) | The hardening model; what to do when a phone is lost, and the honest limits of plugin-side revocation |
+| [`docs/02-harness.md`](docs/02-harness.md) | The bench that exercises host code without touching the live DSH process |
+| `docs/03`, `07`, `09`–`28` | Verification and review records — each round's findings and how they were closed |
+
+Documents mark unproven claims explicitly (`NOT-VERIFIED-LOCALLY`, "mechanism
+inference, not measurement"). Treat those markers as load-bearing: they are the
+reason the acceptance sheet can be trusted.
 
 ## Commands
 
