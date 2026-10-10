@@ -285,8 +285,9 @@ test('routes: a remote revocation needs a redeemed confirmation, and only then t
   assert.equal(refused.body, 'forbidden')
   assert.ok(harness.auditRecords().some((record) => record.result === 'confirm-required'), 'a confirmation round was opened')
 
-  // The phone sees the round in the pending table (and via the push link); the
-  // id is a UUID, which the audit deliberately redacts.
+  // The phone sees the round in the pending table (and via the push link). Since
+  // t33 the audit does **not** redact a UUID, so the round stays nameable in the
+  // trail — while the token itself never leaves the push channel.
   const pendingState = JSON.parse((await harness.request({ url: '/mobile-remote/state', headers: { cookie: aCookie } })).body)
   assert.equal(pendingState.pending.length, 1)
   assert.ok(!('token' in pendingState.pending[0]), 'the pending view never carries the token')
@@ -370,9 +371,31 @@ test('sanitizer: a 29-character bare token no longer survives (F6 regression)', 
   const cleaned = redact(line)
   assert.ok(!cleaned.includes(short), 'the bare token must not survive')
   assert.match(cleaned, /<redacted>/)
-  // A 24-character run is covered too, and a dotted authority is not mangled.
-  assert.match(redact('x'.repeat(24)), /<redacted>/)
+  // A dotted authority is not mangled.
   assert.equal(redact(AUTHORITY), AUTHORITY)
+})
+
+test('t33: redaction hides credentials without eating the identifiers the audit is about', () => {
+  // — credentials: still hidden by value, not by spelling —
+  const base64url = 'Zk3Qv8nR2xT7pL1mB5wY9cH4jD6sA0eU2iO8gN1fV3q'
+  assert.equal(base64url.length, 43, 'the measured length of base64url(randomBytes(32))')
+  assert.match(redact(`boom ${base64url}`), /<redacted>/, 'a bare base64url credential is still redacted')
+  assert.match(redact(`boom ${'a'.repeat(64)}`), /<redacted>/, 'a bare hex digest is still redacted')
+  assert.match(redact('link v1.eyJpZCI6IngifQ.c2ln'), /<redacted>/, 'a v1 capability is redacted')
+  assert.match(redact('?token=abc123'), /token=<redacted>/, 'a token query value is redacted')
+  assert.match(redact('dsh-auth-v1.abcdef'), /dsh-auth-<redacted>/, 'a fence cookie is redacted')
+
+  // — identifiers: these are what the audit exists to record (t33) —
+  const uuid = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
+  assert.equal(redact(`device=${uuid}`), `device=${uuid}`, 'a UUID must survive redaction')
+  assert.equal(redact(AUTHORITY), AUTHORITY, 'a dotted authority must survive redaction')
+  const longLabel = `${'z'.repeat(28)}.ts.net`
+  assert.equal(redact(longLabel), longLabel, 'a long single-label hostname must survive redaction')
+  assert.equal(
+    redact(`confirmation=${uuid}`),
+    `confirmation=${uuid}`,
+    'and a confirmation id must be nameable in the trail',
+  )
 })
 
 // ---------------------------------------------------------------------------

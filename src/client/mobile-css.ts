@@ -8,9 +8,11 @@
  * none), while its JS layer already knows what "narrow" means and already owns a
  * sidebar collapse (docs/00-contract.md §11.1, docs/04b-mobile-dom-inventory.md
  * §2.3). So this module adds **only the missing CSS layer plus the keyboard
- * hand-off** — never a second collapse control, never a DOM rewrite.
+ * hand-off** (the on-screen-keyboard inset, and Escape dismissing the drawer by
+ * pressing the host's own collapse switch) — never a second collapse control,
+ * never a DOM rewrite.
  *
- * The four hard rules this sheet obeys (all enforced by
+ * The five hard rules this sheet obeys (all enforced by
  * `test/client-mobile-css.test.mjs`):
  *
  * 1. **Every rule is inside `@media (max-width: 1024px)` or narrower.** 1024 is
@@ -34,7 +36,18 @@
  *    `<style>` node, no `visualViewport` listener, no CSS variable — and the
  *    `?mobileCss=` URL override can only *subtract*: it may turn the layer off
  *    when the host allows it, never on when the host forbids it (fail-safe, t13
- *    finding F4).
+ *    finding F4). The override is read from this module's own URL, captured once
+ *    at factory entry — never from a `script[src]` scan, because the loader has
+ *    already removed that element by then (t34 finding C1, see
+ *    {@link captureModuleUrl}).
+ * 5. **The sheet only restyles what the host declares, or what this plugin owns.**
+ *    Bare element selectors (`button`), bare ARIA roles (`[role='tab']`) and
+ *    generic hashed fragments (`[class*='_button_']`) are **not** used: inside
+ *    the 1024px block they reach every surface of the host GUI, with
+ *    `!important`, so nothing else — not even another plugin — can override them
+ *    (t34 finding C2). The cost is deliberate and documented at rule 4.1/4.2: a
+ *    host control that exposes no declared hook no longer gets a 40px touch
+ *    target.
  *
  * @module dsh-mobile-remote/client/mobile-css
  */
@@ -76,6 +89,40 @@ export const MOBILE_CSS_META_NAME = 'dsh-mobile-remote-mobile-css'
 
 /** The module-URL query key (`…dsh-mobile-remote/client.js?mobileCss=0`). */
 export const MOBILE_CSS_QUERY_KEY = 'mobileCss'
+
+/** The selector fragment identifying this plugin's own bundle in a load record. */
+export const MODULE_SCRIPT_HINT = `${NAMESPACE}/client.js`
+
+/**
+ * The media query the drawer rules are written against.
+ *
+ * The dismissal handler must ask the *same* question the CSS asks: a wide window
+ * has an ordinary expanded sidebar, not a drawer, and Escape there must leave the
+ * host GUI alone.
+ */
+export const NARROW_MEDIA_QUERY = `(max-width: ${MOBILE_BREAKPOINT_PX}px)`
+
+/**
+ * The drawer's state carrier, byte-identical to the sheet's rule 1.2 subject.
+ *
+ * DSH renders the frame with `data-sidebar-collapsed` while collapsed
+ * (`ui-layout.js:322`), so "the drawer is open" is exactly "the rule matches".
+ */
+export const DRAWER_FRAME_SELECTOR =
+  "#root > [data-slot='root'] > div:not([data-sidebar-collapsed])"
+
+/**
+ * The host's own sidebar collapse switch (docs/04b-mobile-dom-inventory.md §2.1).
+ *
+ * The sidebar root carries no `data-*` attribute at all, so the documented
+ * selector ladder's second rung is the slot anchor plus the `_toggle` local name
+ * (docs/04b-mobile-dom-inventory.md §6.1's M class, §6.3's "attribute first,
+ * `[class*=localName]` second, full hashed class last"). Escape presses **this**
+ * control through its own `onClick: toggleSidebar()` (`sidebar.js:266-288`) rather
+ * than inventing a collapse of our own — the collapse state stays DSH's, exactly
+ * as if the user had tapped the button.
+ */
+export const DRAWER_TOGGLE_SELECTOR = "[data-slot='sidebar'] button[class*='_toggle']"
 
 /** Where a resolved flag value came from — the diagnostic half of the switch. */
 export type MobileCssSource = 'query' | 'global' | 'meta' | 'default'
@@ -246,44 +293,65 @@ export const MOBILE_STYLESHEET = `
     --dsh-composer-text-max-height: min(40svh, 336px) !important;
   }
 
-  /* 4.1  Touch targets. Shipped sizes: shared Button sm 28px / md 36px
-     (app.css R#75/R#76), dockkit tab 28px (R#621), module icon buttons 24-28px
+  /* 4.1  Touch targets — **declared hooks only** (t34 finding C2).
+     Shipped sizes: dockkit tab 28px (app.css R#621), module icon buttons 24-28px
      (R#635, ui-sidebar.js:91, ui-goal.js:129, ui-user-questions.js:608).
      min-* is used rather than fixed sizes so flow controls keep their own
-     layout; absolutely positioned ones grow away from their anchor. */
-  button,
-  [role='button'],
-  [role='menuitem'],
-  [role='menuitemradio'],
-  [role='option'],
-  [role='treeitem'] {
-    min-height: 40px !important;
-  }
-  [class*='_button_'],
-  [class*='_iconButton'],
-  [class*='_iconBtn'],
-  [class*='_toggle'],
-  [data-dockkit-tab],
-  [role='tab'] {
+     layout; absolutely positioned ones grow away from their anchor.
+
+     This block used to carry 'button', '[role=button]', '[role=menuitem]',
+     '[role=menuitemradio]', '[role=option]', '[role=treeitem]',
+     '[class*=_button_]', '[class*=_iconButton]', '[class*=_iconBtn]',
+     '[class*=_toggle]' and '[role=tab]'. Inside a 1024px media block those
+     reach **every control of every surface** — a merely narrowed desktop window
+     included — with !important, and no other sheet (not even another plugin's)
+     can outrank them. They are gone; what remains is what the host *declares*
+     ([data-dockkit-tab]) plus this plugin's own subtree (rule 4.2).
+
+     The trade-off is deliberate: the 40px target no longer reaches host controls
+     that expose no hook (the module icon buttons, the sidebar toggle, the shared
+     Button). A touch target that resizes the whole host GUI is the worse bug;
+     the narrow-screen layer's job is layout, not reskinning every surface. The
+     ladder docs/04b-mobile-dom-inventory.md §6.1 records (S = declared hook,
+     M = [class*=localName], F = full hash) is still what an *unavoidable* rule
+     would use — this one turned out to be avoidable. */
+  [data-dockkit-tab] {
     min-width: 40px !important;
     min-height: 40px !important;
   }
   /* The dockkit tab close affordance is 20x20 and hidden until hover
-     (app.css R#625); on touch there is no hover, so it gets a real box. */
+     (app.css R#625); on touch there is no hover, so it gets a real box. It is
+     scoped *under* the declared tab hook, never global. */
   [data-dockkit-tab] [class*='_tabClose'] {
     width: 32px !important;
     height: 32px !important;
   }
 
-  /* 4.3  The strip must grow with its controls, or the 40px target is a lie.
+  /* 4.2  Our own controls keep a real touch target. They are reached through
+     this plugin's own attribute (pair-card.ts CARD_ATTRIBUTE), i.e. the sheet
+     never has to guess at a host class for them — the .dmr-action box is 36px
+     and 44px below 520px in the card sheet (styles.ts), and the narrow-screen
+     layer only raises the floor here. */
+  [data-dsh-mobile-remote] button,
+  [data-dsh-mobile-remote] a[data-dmr-action] {
+    min-height: 40px !important;
+  }
+
+  /* 4.3  The strip must grow with the tab, or the 40px target is a lie.
      Measured in t26 with the shipped CSS (headless Chromium, docs/05 §2.4):
      the strip is a fixed 28px row (app.css R#608: 'height:28px', plus 10px of
-     top padding) while our min-height raises the tab and the icon button to
-     40px. The 40px box then overflowed 6px below the strip and the pane body
-     - a later sibling in DOM order - was hit-tested there instead, so the real
-     touch target was 34px, not 40px. Raising the strip chain restores the full
-     40px; the cost is 12px of pane height (38px -> 50px).
-     '_stripChrome' holds the split/add icon buttons (app.css R#615). */
+     top padding) while our min-height raises the declared tab to 40px. The 40px
+     box then overflowed 6px below the strip and the pane body - a later sibling
+     in DOM order - was hit-tested there instead, so the real touch target was
+     34px, not 40px. Raising the strip chain restores the full 40px; the cost is
+     12px of pane height (38px -> 50px).
+
+     Since the narrowing in 4.1 the reason is narrower too: only the *tab* is
+     resized now, and the chrome row ('_stripChrome', app.css R#615, holding the
+     split/add icon buttons) is kept in step with the strip so a taller tab row
+     cannot clip against a shorter one. Both fragments are dockkit-local names
+     that no other surface uses; the tab itself is anchored on the declared
+     [data-dockkit-tab] hook. */
   [data-dockkit-strip],
   [class*='_tabStrip'] {
     height: 40px !important;
@@ -360,15 +428,35 @@ export const MOBILE_STYLESHEET = `
 /** The minimum `document` surface the sheet's injection and flag tiers need. */
 export interface MobileDocument {
   querySelector(selector: string): ElementLike | null
-  querySelectorAll?(selector: string): ArrayLike<ElementLike>
   createElement(tag: string): StyleElementLike
   head: { appendChild(node: StyleElementLike): void }
   documentElement: RootElementLike
+  /**
+   * The script currently executing, when there is one — the factory-entry tier of
+   * {@link captureModuleUrl}. Read, never scanned: DSH's loader removes the
+   * `<script>` element on `load` (`docs/evidence/dsh-client-modules__lib__client.js:451-458`)
+   * while the factory runs later, at materialization
+   * (`:17-21`), so `querySelectorAll('script[src]')` can never see it again.
+   */
+  currentScript?: { src?: string } | null
 }
 
 /** The element surface the flag tiers read. */
 export interface ElementLike {
   getAttribute(name: string): string | null
+  /** Present on every real `HTMLElement`; the drawer dismissal presses it. */
+  click?(): void
+}
+
+/** One loaded resource, as `performance.getEntriesByType('resource')` reports it. */
+export interface ResourceTimingLike {
+  /** The absolute URL the resource was fetched from, query string included. */
+  name?: string
+}
+
+/** The `performance` subset that recovers the module URL after the load. */
+export interface PerformanceLike {
+  getEntriesByType?(type: string): ArrayLike<ResourceTimingLike>
 }
 
 /** The `html` element surface the keyboard hand-off writes to. */
@@ -401,20 +489,41 @@ export interface StyleElementLike {
   remove(): void
 }
 
-/** The `window` surface the keyboard hand-off needs (all optional: SSR, tests). */
+/** The `window` surface the keyboard hand-off and the dismissal need. */
 export interface MobileWindow {
   visualViewport?: VisualViewportLike
   innerHeight?: number
-  addEventListener?(type: string, listener: () => void): void
-  removeEventListener?(type: string, listener: () => void): void
+  addEventListener?(type: string, listener: (event?: unknown) => void, options?: ListenerOptions): void
+  removeEventListener?(type: string, listener: (event?: unknown) => void): void
+  /** Frame scheduling for the coalesced viewport sync; absent → run inline. */
+  requestAnimationFrame?(callback: () => void): number
+  cancelAnimationFrame?(handle: number): void
+  /** The width question the sheet's own media block asks, asked of the engine. */
+  matchMedia?(query: string): { matches: boolean } | undefined
+}
+
+/** The listener options this module uses (`passive` — never `capture`). */
+export interface ListenerOptions {
+  /**
+   * Declared for both viewport events and the dismissal keydown: none of these
+   * listeners ever calls `preventDefault`, so the page stays free to scroll and
+   * other Escape consumers (a modal, the shell) keep their say.
+   */
+  passive?: boolean
+}
+
+/** The keydown subset the drawer dismissal reads. */
+export interface KeyEventLike {
+  key?: string
+  defaultPrevented?: boolean
 }
 
 /** The visual-viewport subset used to measure the keyboard. */
 export interface VisualViewportLike {
   height: number
   offsetTop: number
-  addEventListener(type: string, listener: () => void): void
-  removeEventListener(type: string, listener: () => void): void
+  addEventListener(type: string, listener: (event?: unknown) => void, options?: ListenerOptions): void
+  removeEventListener(type: string, listener: (event?: unknown) => void): void
 }
 
 /** Everything this module reads from the page; every member is optional. */
@@ -423,6 +532,17 @@ export interface MobileEnvironment {
   window?: MobileWindow
   /** The host-published global (index-inject row, see docs/05 §4). */
   hostGlobal?: { [key: string]: unknown }
+  /**
+   * This module's own URL — the carrier of the `?mobileCss=` override.
+   *
+   * Naming the key (even as `undefined`) is an explicit answer: it is what
+   * `src/client/index.ts` passes down after capturing at factory entry, and what
+   * lets a caller say "this page has no override" without the page being read at
+   * all.
+   */
+  moduleUrl?: string
+  /** The resource-timing source; defaults to the live `performance`. */
+  performance?: PerformanceLike
 }
 
 /** The style tag lookup: stable id first, then the HMR-facing tag id. */
@@ -442,19 +562,102 @@ function parseBooleanish(value: unknown): boolean | undefined {
   return undefined
 }
 
-/** The per-request override: `?mobileCss=0` anywhere on a plugin script URL. */
-function readQueryFlag(document: MobileDocument | undefined): boolean | undefined {
-  const scripts = document?.querySelectorAll?.('script[src]')
-  if (scripts === undefined) return undefined
-  const pattern = new RegExp(`[?&]${MOBILE_CSS_QUERY_KEY}=([^&#]*)`)
-  for (let index = 0; index < scripts.length; index += 1) {
-    const script = scripts[index]
-    const src = script?.getAttribute('src')
-    if (typeof src !== 'string' || !src.includes(`${NAMESPACE}/client.js`)) continue
-    const match = pattern.exec(src)
-    if (match === null) continue
-    const parsed = parseBooleanish(decodeURIComponent(match[1] ?? ''))
-    if (parsed !== undefined) return parsed
+/**
+ * The per-request override: `?mobileCss=0` on **this plugin's own URL**.
+ *
+ * The namespace predicate is the one the removed DOM scan used, and it is applied
+ * at every tier: a URL that is not this bundle's cannot carry an override, so no
+ * caller — and no unrelated resource the page happens to have recorded — can
+ * switch the layer off by accident.
+ */
+function readQueryFlag(moduleUrl: string | undefined): boolean | undefined {
+  if (typeof moduleUrl !== 'string' || !moduleUrl.includes(MODULE_SCRIPT_HINT)) return undefined
+  const match = new RegExp(`[?&]${MOBILE_CSS_QUERY_KEY}=([^&#]*)`).exec(moduleUrl)
+  if (match === null) return undefined
+  return parseBooleanish(decodeURIComponent(match[1] ?? ''))
+}
+
+/**
+ * Capture this module's own URL, once, at factory entry (t34 finding C1).
+ *
+ * **Why not a DOM scan.** `?mobileCss=0` rides on the bundle's own script URL —
+ * DSH fetches `/plugins/…/client.js??rev=…` as a classic script
+ * (`docs/evidence/dsh-client-modules__lib__client.js:451-458`). But that loader
+ * removes the element in its `load` listener, and this bundle's factory only runs
+ * later, at materialization (`:17-21`: "Materialization (factory(require) →
+ * exports) happens on first import/require"). By the time any code in this module
+ * could look, `document.querySelectorAll('script[src]')` is empty, so the old
+ * scan could never fire in production. The URL is therefore captured from what
+ * the page still *knows* about the load, and handed down to
+ * {@link readMobileCssFlag} as a value: `src/client/index.ts` captures once, at
+ * the factory's entry point, and every switch resolution below reads the value it
+ * passed rather than the page.
+ *
+ * The tiers, first answer wins:
+ *
+ * 1. `environment.moduleUrl` — an explicit answer (tests, a scratch page, any
+ *    caller that already knows the URL);
+ * 2. `document.currentScript?.src` — the executing script, which is what "factory
+ *    entry" means when the loader materializes synchronously;
+ * 3. `performance.getEntriesByType('resource')` — the browser's own record of the
+ *    load, and the tier that survives the element being removed: the entry keeps
+ *    the absolute URL, query string included, after the `<script>` is gone. The
+ *    last matching entry wins, so an HMR reload's newer `rev` beats the old one;
+ * 4. nothing — "no flag", the fail-safe default.
+ *
+ * `import.meta.url` is deliberately **not** a tier. In this CJS bundle the bundler
+ * lowers it to a Node-only expression that calls the injected `require` for the
+ * `url` builtin and reads `__filename` (verified by building and reading the
+ * emitted `lib/client.js`) — in the browser that call hits a module table with no
+ * such entry, and the artifact would stop reaching nothing but `react`. The module
+ * URL therefore has to come from the page, not from the bundler's Node fallback.
+ *
+ * @param environment - the page surface; omit for the live page.
+ * @returns the URL, or `undefined` when the page exposes none.
+ */
+export function captureModuleUrl(environment?: MobileEnvironment): string | undefined {
+  return readModuleUrl(environment)
+}
+
+/**
+ * The module URL for one flag read.
+ *
+ * An environment that names `moduleUrl` — including as `undefined` — is an
+ * explicit answer and is never second-guessed; that is how `apply()` hands down
+ * what it captured, and how a test says "this page has no override". Only a read
+ * that names nothing falls back to the page, so the exported readers keep working
+ * standalone (a scratch page, a direct `mobileCssText()` call).
+ */
+function resolveModuleUrl(environment?: MobileEnvironment): string | undefined {
+  if (environment !== undefined && 'moduleUrl' in environment) return environment.moduleUrl
+  return readModuleUrl(environment)
+}
+
+/** Read the module URL out of the page surface, without recording it. */
+function readModuleUrl(environment?: MobileEnvironment): string | undefined {
+  const document = environment?.document ?? (globalThis as { document?: MobileDocument }).document
+  const current = document?.currentScript?.src
+  if (typeof current === 'string' && current !== '') return current
+  return readResourceTimingUrl(environment)
+}
+
+/**
+ * The browser's own record of the bundle load (tier 3 of {@link captureModuleUrl}).
+ *
+ * Only entries whose URL names this plugin's `client.js` are considered, the same
+ * predicate the removed DOM scan used, and the newest match wins: a
+ * `dsh-client-hmr` reload re-fetches the bundle under a new `rev`, and the flag
+ * that belongs to the running module is the last one fetched.
+ */
+function readResourceTimingUrl(environment?: MobileEnvironment): string | undefined {
+  const source =
+    environment?.performance ?? (globalThis as { performance?: PerformanceLike }).performance
+  const entries = source?.getEntriesByType?.('resource')
+  if (entries === undefined) return undefined
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const name = entries[index]?.name
+    if (typeof name !== 'string' || !name.includes(MODULE_SCRIPT_HINT)) continue
+    return name
   }
   return undefined
 }
@@ -472,7 +675,9 @@ function readQueryFlag(document: MobileDocument | undefined): boolean | undefine
  *    needs no host change (a scratch page or the HMR loop). `0` turns the layer
  *    **off** even when the host allows it; `1` cannot turn it **on** when the
  *    host forbids it (t13 F4: an operator's `false` must not be reversible from
- *    the page URL).
+ *    the page URL). The URL comes from {@link captureModuleUrl} — never from a
+ *    `script[src]` scan, which the loader's own cleanup has already emptied
+ *    (t34 finding C1).
  *
  * `source` names the tier that decided the answer; `ignoredQuery` is set when a
  * query asked for something the host does not allow, so the diagnostic line can
@@ -483,7 +688,7 @@ function readQueryFlag(document: MobileDocument | undefined): boolean | undefine
  */
 export function readMobileCssFlag(environment?: MobileEnvironment): MobileCssFlag {
   const document = resolveDocument(environment)
-  const fromQuery = readQueryFlag(document)
+  const fromQuery = readQueryFlag(resolveModuleUrl(environment))
   const host = readHostFlag(environment, document)
 
   if (!host.enabled) {
@@ -586,6 +791,17 @@ export function injectMobileCss(environment?: MobileEnvironment): () => void {
  * set while the shortfall is keyboard-sized (see {@link KEYBOARD_MIN_INSET_PX}).
  * The sheet's rule 6.1 consumes both.
  *
+ * **The events are coalesced into one animation frame** (t34 finding C6). The
+ * measurement is a read-then-write pair — `innerHeight` and `visualViewport` are
+ * forced-layout reads, and both `html` writes invalidate style — so running it
+ * per event, as this used to, means a burst of `scroll` events while the mobile
+ * URL bar collapses can force a style recalculation per frame *on the exact path
+ * users perceive as jank*. Dragging the URL bar now costs at most one
+ * measurement per frame, and the frame is the interval in which the browser would
+ * paint the result anyway. The listeners are also marked `passive`: none of them
+ * ever calls `preventDefault`, and a passive listener tells the engine it may
+ * keep scrolling without waiting for us.
+ *
  * The listener is not installed and the attribute is not set when the switch is
  * off — the caller (`installNarrowScreenLayer`) checks first.
  *
@@ -614,20 +830,108 @@ export function installKeyboardAvoidance(environment?: MobileEnvironment): () =>
     else root.removeAttribute(KEYBOARD_STATE_ATTR)
   }
 
+  /**
+   * The pending frame handle, or 0 when nothing is scheduled. A number rather
+   * than a boolean so `cancelAnimationFrame` can be handed the real handle.
+   *
+   * Both frame functions are reached through `window` (never detached into a
+   * local): the browser's own implementations reject an unbound call.
+   */
+  let pendingFrame = 0
+
+  const schedule = (): void => {
+    if (typeof window?.requestAnimationFrame !== 'function') {
+      // No frame scheduling in this environment (SSR, `node --test` without a
+      // stub): measure inline, which is the behaviour the coalescing replaces.
+      sync()
+      return
+    }
+    if (pendingFrame !== 0) return
+    pendingFrame = window.requestAnimationFrame(() => {
+      pendingFrame = 0
+      sync()
+    })
+  }
+
+  // The initial measurement is immediate on purpose: the first paint must already
+  // carry the right inset, a frame later would show the composer under the
+  // keyboard once.
   sync()
-  viewport?.addEventListener('resize', sync)
-  viewport?.addEventListener('scroll', sync)
-  window?.addEventListener?.('resize', sync)
+  viewport?.addEventListener('resize', schedule, { passive: true })
+  viewport?.addEventListener('scroll', schedule, { passive: true })
+  window?.addEventListener?.('resize', schedule, { passive: true })
 
   let disposed = false
   return () => {
     if (disposed) return
     disposed = true
-    viewport?.removeEventListener('resize', sync)
-    viewport?.removeEventListener('scroll', sync)
-    window?.removeEventListener?.('resize', sync)
+    viewport?.removeEventListener('resize', schedule)
+    viewport?.removeEventListener('scroll', schedule)
+    window?.removeEventListener?.('resize', schedule)
+    // A frame scheduled but not yet run must not touch the page after disposal.
+    if (pendingFrame !== 0) {
+      const frame = pendingFrame
+      pendingFrame = 0
+      window?.cancelAnimationFrame?.(frame)
+    }
     root.style.removeProperty(KEYBOARD_INSET_VAR)
     root.removeAttribute(KEYBOARD_STATE_ATTR)
+  }
+}
+
+/**
+ * Let Escape close the narrow-screen drawer (t34 finding C5).
+ *
+ * The drawer rule (1.2) takes the expanded sidebar column out of flow as a
+ * `position: fixed` overlay, so on a phone it covers the surface a pointer would
+ * use to dismiss it — and the module had no pointer or key handling at all, which
+ * left a keyboard user with no way out. Escape is that way out, and it closes the
+ * drawer by **pressing the host's own collapse switch**
+ * ({@link DRAWER_TOGGLE_SELECTOR}): DSH's `toggleSidebar()` stays the single
+ * owner of the collapse state, so the sidebar's own visuals, the frame's
+ * `[data-sidebar-collapsed]` and the next render all agree — nothing here mints a
+ * second collapse state of its own (docs/00-contract.md §11.1's "不要自造折叠").
+ *
+ * Every guard fails *safe*, i.e. toward doing nothing:
+ *
+ * - only inside {@link NARROW_MEDIA_QUERY} — on a wide window the sidebar is an
+ *   ordinary expanded column, not a drawer, and Escape must not close it;
+ * - only while {@link DRAWER_FRAME_SELECTOR} matches, which is byte-for-byte the
+ *   drawer rule's own subject, so "Escape does nothing" whenever the CSS would
+ *   not have drawn a drawer either;
+ * - never for an event another handler already consumed (`defaultPrevented`), and
+ *   never `preventDefault` itself — a modal's Escape keeps working.
+ *
+ * Registered and released on the same lifecycle as the `visualViewport`
+ * listeners: `installNarrowScreenLayer` owns both disposers, so unmount leaves no
+ * listener behind.
+ *
+ * @param environment - the page surface; defaults to the real one.
+ * @returns a disposer that removes the keydown listener.
+ */
+export function installDrawerDismiss(environment?: MobileEnvironment): () => void {
+  const document = resolveDocument(environment)
+  const window = resolveWindow(environment)
+  if (document === undefined || typeof window?.addEventListener !== 'function') return () => {}
+
+  const onKeyDown = (event?: unknown): void => {
+    const keydown = event as KeyEventLike | undefined
+    if (keydown?.key !== 'Escape') return
+    if (keydown.defaultPrevented === true) return
+    if (window.matchMedia?.(NARROW_MEDIA_QUERY)?.matches !== true) return
+    if (document.querySelector(DRAWER_FRAME_SELECTOR) === null) return
+    const toggle = document.querySelector(DRAWER_TOGGLE_SELECTOR)
+    if (typeof toggle?.click !== 'function') return
+    toggle.click()
+  }
+
+  window.addEventListener('keydown', onKeyDown, { passive: true })
+
+  let disposed = false
+  return () => {
+    if (disposed) return
+    disposed = true
+    window.removeEventListener?.('keydown', onKeyDown)
   }
 }
 
@@ -636,7 +940,11 @@ export function installKeyboardAvoidance(environment?: MobileEnvironment): () =>
  *
  * This is the only entry point `src/client/index.ts` calls, and it is the single
  * place the switch is read: with `mobileCss: false` it installs no `<style>`
- * node and no `visualViewport` listener.
+ * node, no `visualViewport` listener and no dismissal listener.
+ *
+ * The three installers share one disposer on purpose: an unmount that released a
+ * sheet but kept a listener (or the other way round) is exactly the leak this
+ * shape makes impossible.
  *
  * @param environment - the page surface; defaults to the real one.
  * @returns a disposer releasing everything this call acquired.
@@ -660,7 +968,9 @@ export function installNarrowScreenLayer(environment?: MobileEnvironment): () =>
 
   const disposeStyle = injectMobileCss(environment)
   const disposeKeyboard = installKeyboardAvoidance(environment)
+  const disposeDismiss = installDrawerDismiss(environment)
   return () => {
+    disposeDismiss()
     disposeKeyboard()
     disposeStyle()
   }

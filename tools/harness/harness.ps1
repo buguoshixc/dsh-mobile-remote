@@ -373,7 +373,7 @@ function Show-Probe {
 function Invoke-DumpConfig {
   Initialize-Layout
   # V-3/F8: the dump is a one-shot command, not the instance's mount log. It gets
-  # its own pair of files — the mount log ($StdOut = logs\scratch.out) belongs to
+  # its own pair of files - the mount log ($StdOut = logs\scratch.out) belongs to
   # the running scratch instance, and redirecting the dump there truncated it
   # (the message used to name dumpcfg.out while the redirect wrote scratch.out).
   $out = Join-Path $LogDir 'dumpcfg.out'

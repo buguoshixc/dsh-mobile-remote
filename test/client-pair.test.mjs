@@ -92,7 +92,11 @@ test('QR: the module matrix of a fixed input is pinned and reproducible', () => 
   assert.equal(url.version, 6)
   assert.equal(url.size, 41)
   assert.equal(url.mask, 2)
-  assert.equal(matrixHash(url), 'cbfc34746e89f4be684a347dd1d785cee627644ec674012d263b59128084eaf1')
+  // Re-pinned after the fixture's authority was redacted to a placeholder of the
+  // same length (the byte count, version and mask above are unchanged). The pin
+  // still guards the encoder, and the independent decoder further down this file
+  // is what proves the matrix is *correct* rather than merely stable.
+  assert.equal(matrixHash(url), '132c06fb5c33614e78df478745d87fa9331644d29041a33347c015a87ce16edf')
 
   // Reproducible: a second run over the same input hashes identically.
   assert.equal(matrixHash(qr.encodeQr(PAIRING_URL)), matrixHash(url))
@@ -198,6 +202,35 @@ test('QR: structural invariants hold for every version the encoder can emit', ()
     }
   }
   assert.deepEqual([...versions].sort((a, b) => a - b), [1, 2, 4, 6, 8, 10])
+})
+
+test('QR (C7): a pinned mask outside 0–7 fails loudly instead of being folded', () => {
+  const bytes = qr.payloadBytes('HELLO')
+
+  // The in-range contract: the pinned mask is the mask that comes back.
+  for (let mask = 0; mask < 8; mask += 1) {
+    const matrix = qr.encodeBytes(bytes, 1, mask)
+    assert.equal(matrix.mask, mask, `mask ${mask} must pin itself`)
+    assert.equal(matrix.version, 1)
+  }
+  // Two different masks are two different matrices (the pin is doing something).
+  assert.notEqual(canonical(qr.encodeBytes(bytes, 1, 0)), canonical(qr.encodeBytes(bytes, 1, 1)))
+
+  // Out of range: before this guard `mask & 7` silently folded the value onto a
+  // *different* mask (9 became 1, 100 became 4, NaN became 0) and the caller got a
+  // matrix it never asked for. Exported API has to say so instead.
+  for (const bad of [-1, 8, 9, 100, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => qr.encodeBytes(bytes, 1, bad),
+      (error) => error instanceof RangeError && /mask/i.test(error.message),
+      `mask ${String(bad)} must be rejected`,
+    )
+  }
+
+  // The search path (no mask) and `encodeQr` keep their behaviour: the guard is
+  // about the pinned-mask API only.
+  assert.equal(qr.encodeQr('HELLO').mask, 4)
+  assert.equal(qr.encodeBytes(bytes, 1).mask, 4)
 })
 
 // ---------------------------------------------------------------------------
@@ -958,6 +991,104 @@ test('mount: the card stylesheet carries the hooks and the theme tokens', () => 
   assert.ok(styles.CARD_STYLESHEET.includes('--dsw-alias-'), 'colours come from theme tokens')
   assert.equal(styles.CARD_STYLE_ID, 'dsh-mobile-remote-card-style')
   assert.equal(styles.CARD_STYLE_KEY, 'dsh-mobile-remote/pair-card')
+})
+
+test('card styles (C3): every tone the card emits is themed', () => {
+  // Derived from the card's own output rather than from a copy of the list, so a
+  // new tone cannot ship without a rule. 'ok' was emitted (the ready state) while
+  // the sheet themed only 'error' and 'busy', so a success state inherited the
+  // neutral colour (t34 finding C3).
+  const retry = () => {}
+  const states = [
+    { kind: 'loading' },
+    { kind: 'failed', failure: 'network', detail: 'Failed to fetch', hint: '没有到达本机 DSH。' },
+    { kind: 'ready', url: PAIRING_URL, authority: 'demo.tailnet-example.ts.net', expiresAt: null },
+  ]
+  const tones = new Set()
+  for (const state of states) {
+    for (const child of card.cardBody(state, retry)) {
+      const tone = child?.props?.['data-dmr-tone']
+      if (tone !== undefined) tones.add(tone)
+    }
+  }
+  assert.deepEqual([...tones].sort(), ['busy', 'error', 'ok'])
+  for (const tone of tones) {
+    assert.match(
+      styles.CARD_STYLESHEET,
+      new RegExp(`\\.dmr-status\\[data-dmr-tone='${tone}'\\][^{]*\\{[^}]*color:`),
+      `the "${tone}" tone needs a colour rule`,
+    )
+  }
+  // The success tone is the shipped success alias, not a hand-mixed colour.
+  assert.match(styles.CARD_STYLESHEET, /data-dmr-tone='ok'\][^{]*\{[^}]*--dsw-alias-state-success-primary/)
+})
+
+test('card copy (C4): the state is exposed to assistive tech and never silent', async () => {
+  const noop = () => {}
+  const idle = card.copyButtonView('idle', noop)
+  const copied = card.copyButtonView('copied', noop)
+  const manual = card.copyButtonView('manual', noop)
+
+  // One button, and only the fallback state adds the note.
+  assert.equal(idle.length, 1)
+  assert.equal(copied.length, 1)
+  assert.equal(manual.length, 2)
+
+  const button = (view) => view[0]
+  assert.equal(button(idle).props['aria-pressed'], false)
+  assert.equal(button(copied).props['aria-pressed'], true)
+  assert.equal(button(manual).props['aria-pressed'], false)
+  // The label change is announced: the button is a polite live region, and the
+  // state itself is readable from the DOM.
+  for (const [state, view] of [['idle', idle], ['copied', copied], ['manual', manual]]) {
+    assert.equal(button(view).props['aria-live'], 'polite')
+    assert.equal(button(view).props['data-dmr-copy'], state)
+  }
+  assert.equal(button(idle).props.children, card.COPY_IDLE_LABEL)
+  assert.equal(button(copied).props.children, card.COPY_DONE_LABEL)
+  // A confirmation is transient: the component resets it after this long.
+  assert.equal(button(manual).props.children, card.COPY_IDLE_LABEL)
+  assert.equal(typeof card.COPY_RESET_MS, 'number')
+  assert.ok(card.COPY_RESET_MS > 0)
+
+  // The fallback is a readable instruction in its own live region, not silence.
+  const note = manual[1]
+  assert.equal(note.props.role, 'status')
+  assert.equal(note.props['aria-live'], 'polite')
+  assert.equal(note.props['data-dmr-copy-note'], 'manual')
+  assert.equal(note.props.children, card.COPY_MANUAL_HINT)
+  assert.ok(String(card.COPY_MANUAL_HINT).length > 0)
+  assert.match(styles.CARD_STYLESHEET, /\.dmr-copy-note\s*\{/)
+
+  // The behaviour behind the states. The clipboard is booby-trapped rather than
+  // assumed: Node has a `navigator` global whose `clipboard` is undefined, which
+  // is exactly the insecure-origin shape the old handler returned from silently.
+  const savedNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  const seen = []
+  const apply = (state) => seen.push(state)
+  try {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: {} })
+    card.handleCopy(PAIRING_URL, apply)
+    assert.deepEqual(seen, ['manual'], 'a missing clipboard API must say so, not return')
+  } finally {
+    if (savedNavigator === undefined) delete globalThis.navigator
+    else Object.defineProperty(globalThis, 'navigator', savedNavigator)
+  }
+
+  // A rejecting write, and a hostile stub that throws synchronously.
+  card.handleCopy(PAIRING_URL, apply, { writeText: () => Promise.reject(new Error('denied')) })
+  card.handleCopy(PAIRING_URL, apply, {
+    writeText: () => {
+      throw new Error('boom')
+    },
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(seen.slice(1), ['manual', 'manual'])
+
+  // A working clipboard reports success through the same path.
+  card.handleCopy(PAIRING_URL, apply, { writeText: (text) => Promise.resolve(text) })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(seen, ['manual', 'manual', 'manual', 'copied'])
 })
 
 // ---------------------------------------------------------------------------

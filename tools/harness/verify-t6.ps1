@@ -224,7 +224,7 @@ if (Want 'live') {
   } else {
     # The banner goes through ctx.logger (no exporter in a scratch instance), and
     # `-Action dumpconfig` overwrites scratch.out, so that loader-level check runs
-    # last (cleanup) — after every section that needs the launch token.
+    # last (cleanup) - after every section that needs the launch token.
     $script:deferDumpCheck = $true
     Step 'mount banner is not on stdout (ctx.logger has no exporter here): the composed-tree check runs at cleanup'
   }

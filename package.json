@@ -46,6 +46,7 @@
     "clean": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\"",
     "test": "node --test \"test/*.test.mjs\"",
     "verify": "pnpm typecheck && pnpm build && pnpm test",
+    "prepack": "tsdown",
     "prepare": "tsdown"
   },
   "keywords": [

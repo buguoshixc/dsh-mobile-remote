@@ -1,23 +1,29 @@
 /**
  * T5 tests — the narrow-screen sheet (`node --test`).
  *
- * Six groups, one per acceptance criterion plus the artifact guards:
+ * Seven groups, one per acceptance criterion plus the artifact guards:
  *
  *  1. **sheet shape** — every rule is inside `@media (max-width: ≤1024px)`, every
- *     declaration is `!important`, nothing uses `100vh`, and each acceptance
- *     target has a locating rule;
+ *     declaration is `!important`, nothing uses `100vh`, no rule targets a bare
+ *     element or bare ARIA role (t34 C2), and each acceptance target has a
+ *     locating rule;
  *  2. **the switch** — the four tiers of `readMobileCssFlag` in order, the word
- *     forms a written config may produce, and "off means zero bytes, zero nodes,
- *     zero listeners";
+ *     forms a written config may produce, the module-URL capture that makes
+ *     `?mobileCss=` reachable at all (t34 C1: the loader's `<script>` is gone by
+ *     the time `apply()` runs), and "off means zero bytes, zero nodes, zero
+ *     listeners";
  *  3. **the state proof** — a fake DOM mirroring docs/04b §1.1 plus a miniature
  *     CSS matcher/cascade, used to show that the collapsed (built-in rail) and
- *     the expanded (drawer) states are each handled, that a 1440px viewport
- *     matches **no** rule at all, and that inline styles and later-injected
+ *     the expanded (drawer) states are each handled, that the narrowed sheet no
+ *     longer restyles generic host controls, that a 1440px viewport matches
+ *     **no** rule at all, and that inline styles and later-injected
  *     non-important competitors lose to the sheet;
  *  4. **idempotency and lifecycle** — one node per document, `apply(ctx)`
  *     wiring, disposal;
- *  5. **the keyboard hand-off** — `visualViewport` simulation, thresholds,
- *     disposer, and the static assertion for the sheet's rule 6.1;
+ *  5. **the keyboard hand-off** — `visualViewport` simulation, thresholds, the
+ *     rAF coalescing and passive registration (t34 C6), disposer, the Escape
+ *     dismissal of the drawer (t34 C5), and the static assertion for the sheet's
+ *     rule 6.1;
  *  6. **the artifact** — the built bundle carries the sheet and passes the
  *     terminal guards that `pnpm verify` runs.
  *
@@ -39,6 +45,16 @@ const CLIENT_ARTIFACT = join(repoRoot, 'lib', 'client.js')
 
 const mobileCss = await import(pathToFileURL(join(repoRoot, 'src', 'client', 'mobile-css.ts')).href)
 const clientHalf = await import(pathToFileURL(join(repoRoot, 'src', 'client', 'index.ts')).href)
+
+/**
+ * The bundle's own URL, in the shape dsh-client-modules fetches it.
+ *
+ * `??` is the loader's bundle marker and `rev` is the revision it rewrites on
+ * every recomposition (`docs/evidence/dsh-client-modules__lib__client.js:451-458`
+ * and its `atRevision`); the query string is where `?mobileCss=` rides. The host
+ * is a placeholder — never a real tailnet authority.
+ */
+const BUNDLE_URL = 'https://harness.test/plugins/??dsh-mobile-remote/client.js&rev=abc'
 
 // ---------------------------------------------------------------------------
 // A miniature CSS reader: comments, media blocks, rules, declarations
@@ -214,6 +230,23 @@ function matchAttribute(inner, node) {
   return operator === '=' ? actual === expected : actual.includes(expected)
 }
 
+/**
+ * A compound with no qualifier of its own: an optional type (`button`, `div`, `*`)
+ * and optionally one bare ARIA role (`[role='tab']`), nothing else.
+ *
+ * `div:not([data-sidebar-collapsed])` and `textarea.xterm-helper-textarea` are
+ * *not* bare — they carry a state guard or a class — and `[data-dockkit-tab]` is
+ * not bare either: an attribute selector is a declared hook, which is exactly the
+ * form the sheet is allowed to use (t34 finding C2).
+ */
+function isBareCompound(compound) {
+  const rest = compound
+    .trim()
+    .replace(/^([a-zA-Z][\w-]*|\*)/, '')
+    .replace(/^\[role\s*=\s*['"]?[\w-]+['"]?\]/, '')
+  return rest.trim().length === 0
+}
+
 /** One compound selector (no combinators) against one node. */
 function matchCompound(compound, node) {
   let rest = compound.trim()
@@ -372,6 +405,8 @@ class FakeNode {
     this.attributes = new Map(Object.entries(attributes))
     this.children = []
     this.parent = undefined
+    /** How many times the host's own click handler would have run. */
+    this.clicks = 0
     this.style = {
       properties: new Map(),
       setProperty: (name, value) => this.style.properties.set(name, value),
@@ -424,6 +459,11 @@ class FakeNode {
     child.parent = this
     this.children.push(child)
     return child
+  }
+
+  /** The real `HTMLElement.click()`: run the element's own activation behaviour. */
+  click() {
+    this.clicks += 1
   }
 
   remove() {
@@ -480,13 +520,20 @@ class FakeDocument {
   }
 }
 
-/** The frame tree: docs/04b §1.1 with the attributes the JSX actually writes. */
+/**
+ * The frame tree: docs/04b §1.1 with the attributes the JSX actually writes.
+ *
+ * The bundle's own `<script>` is deliberately **absent**: DSH's loader removes it
+ * in its `load` listener (`docs/evidence/dsh-client-modules__lib__client.js:451-458`)
+ * while this plugin's factory runs later, at materialization (`:17-21`), so the
+ * DOM a flag read sees never contains it (t34 finding C1). Tests that model the
+ * load use `loadBundleScript` below.
+ */
 function buildTree(options = {}) {
   const { collapsed = true, expandedWidth = '280px', viewportWide = false } = options
   const html = new FakeNode('html')
   const head = html.appendChild(new FakeNode('head'))
   const body = html.appendChild(new FakeNode('body'))
-  body.appendChild(new FakeNode('script', { src: 'plugins/??dsh-mobile-remote/client.js&rev=abc' }))
 
   const frameAttributes = { class: 'BynINW_frame' }
   if (collapsed) frameAttributes['data-sidebar-collapsed'] = 'true'
@@ -497,10 +544,16 @@ function buildTree(options = {}) {
 
   const sidebarRootAttributes = { class: collapsed ? '_2H3hWW_root _2H3hWW_collapsed' : '_2H3hWW_root' }
   if (!collapsed) sidebarRootAttributes['style'] = `width: ${expandedWidth}`
-  frame
+  const sidebarRoot = frame
     .appendChild(new FakeNode('div', { class: 'BynINW_sidebarCol' }))
     .appendChild(new FakeNode('div', { 'data-slot': 'sidebar', style: 'display:contents' }))
     .appendChild(new FakeNode('div', sidebarRootAttributes))
+  // The host's own collapse switch (docs/04b §2.1/§2.3): the button Escape
+  // presses. Its classes are the hashed pair `_2H3hWW_iconButton _2H3hWW_toggle`
+  // the shipped build writes; the slot anchor above is what the module keys off.
+  const toggle = sidebarRoot
+    .appendChild(new FakeNode('div', { class: '_2H3hWW_logoRow' }))
+    .appendChild(new FakeNode('button', { class: '_2H3hWW_iconButton _2H3hWW_toggle', 'aria-label': '折叠侧栏' }))
 
   const center = frame.appendChild(new FakeNode('div', { class: 'BynINW_centerCol' }))
   const conversation = center
@@ -557,7 +610,37 @@ function buildTree(options = {}) {
   )
   xtermRows.appendChild(new FakeNode('textarea', { class: 'xterm-helper-textarea', 'aria-label': 'Terminal input' }))
 
-  return { html, head, body, frame, sidebarRoot: sidebarRootOf(frame), center, rightbar, panel, tabLayout, pane, xterm, xtermRows }
+  return { html, head, body, frame, sidebarRoot: sidebarRootOf(frame), toggle, center, rightbar, panel, tabLayout, pane, xterm, xtermRows }
+}
+
+/**
+ * The loader's own lifecycle for this bundle (t34 finding C1).
+ *
+ * `defaultLoadBundle` appends the classic `<script>`, then removes it in the
+ * `load` listener (`docs/evidence/dsh-client-modules__lib__client.js:451-458`);
+ * the factory — and therefore `apply()` — runs later still, at materialization
+ * (`:17-21`). The returned node is what `document.currentScript` would have been
+ * while the script executed, and what the resource-timing record still names.
+ */
+function loadBundleScript(body, url) {
+  const script = new FakeNode('script', { src: url })
+  body.appendChild(script)
+  script.remove()
+  return script
+}
+
+/** A `performance` stub reporting the loads the browser has recorded. */
+function loadedResources(...urls) {
+  return {
+    getEntriesByType(type) {
+      return type === 'resource' ? urls.map((name) => ({ name, initiatorType: 'script' })) : []
+    },
+  }
+}
+
+/** A `performance` stub with nothing in the buffer. */
+function noResources() {
+  return loadedResources()
 }
 
 /** The sidebar box: `[data-slot="sidebar"] > div`. */
@@ -593,20 +676,24 @@ function withGlobals(values, run) {
   }
 }
 
-/** A `visualViewport` stub with listener bookkeeping. */
+/** A `visualViewport` stub with listener bookkeeping (and their options). */
 function fakeVisualViewport(height, offsetTop) {
   const listeners = new Map()
+  const options = new Map()
   return {
     height,
     offsetTop,
     listeners,
-    addEventListener(type, listener) {
+    options,
+    addEventListener(type, listener, listenerOptions) {
       const set = listeners.get(type) ?? new Set()
       set.add(listener)
       listeners.set(type, set)
+      options.set(listener, listenerOptions)
     },
     removeEventListener(type, listener) {
       listeners.get(type)?.delete(listener)
+      options.delete(listener)
     },
     emit(type) {
       for (const listener of listeners.get(type) ?? []) listener()
@@ -616,23 +703,73 @@ function fakeVisualViewport(height, offsetTop) {
       for (const set of listeners.values()) total += set.size
       return total
     },
+    /** The options each listener of one type was registered with. */
+    registrations(type) {
+      return [...(listeners.get(type) ?? [])].map((listener) => options.get(listener))
+    },
   }
 }
 
-/** A `window` stub carrying one visual viewport. */
-function fakeWindow(visualViewport, innerHeight) {
-  const listeners = new Set()
+/**
+ * A `window` stub carrying one visual viewport.
+ *
+ * Listener bookkeeping is per type (the Escape dismissal listens on `keydown`),
+ * frames are deferred until `runFrame()` — which is what one animation frame is —
+ * and `matchMedia` answers exactly the query the sheet's own breakpoint asks.
+ */
+function fakeWindow(visualViewport, innerHeight, config = {}) {
+  const listeners = new Map()
+  const listenerOptions = new Map()
+  const frames = new Map()
+  let nextFrame = 1
+  const media = new Set(config.narrow === true ? [mobileCss.NARROW_MEDIA_QUERY] : [])
   return {
     visualViewport,
     innerHeight,
-    addEventListener(type, listener) {
-      if (type === 'resize') listeners.add(listener)
+    addEventListener(type, listener, options) {
+      const set = listeners.get(type) ?? new Set()
+      set.add(listener)
+      listeners.set(type, set)
+      listenerOptions.set(listener, options)
     },
     removeEventListener(type, listener) {
-      listeners.delete(listener)
+      listeners.get(type)?.delete(listener)
+      listenerOptions.delete(listener)
+    },
+    emit(type, event) {
+      for (const listener of [...(listeners.get(type) ?? [])]) listener(event)
+    },
+    listenerCount(type) {
+      return type === undefined ? [...listeners.values()].reduce((sum, set) => sum + set.size, 0) : (listeners.get(type)?.size ?? 0)
     },
     resizeListenerCount() {
-      return listeners.size
+      return this.listenerCount('resize')
+    },
+    /** The options each listener of one type was registered with. */
+    registrations(type) {
+      return [...(listeners.get(type) ?? [])].map((listener) => listenerOptions.get(listener))
+    },
+    requestAnimationFrame(callback) {
+      const handle = nextFrame
+      nextFrame += 1
+      frames.set(handle, callback)
+      return handle
+    },
+    cancelAnimationFrame(handle) {
+      frames.delete(handle)
+    },
+    /** Run every frame scheduled so far, as the browser's next frame would. */
+    runFrame() {
+      const pending = [...frames.values()]
+      frames.clear()
+      for (const callback of pending) callback()
+      return pending.length
+    },
+    pendingFrames() {
+      return frames.size
+    },
+    matchMedia(query) {
+      return { matches: media.has(query), media: query }
     },
   }
 }
@@ -696,6 +833,63 @@ test('sheet: no 100vh, and the only viewport units are the small/dynamic ones', 
   assert.ok(/env\(safe-area-inset-bottom/.test(mobileCss.MOBILE_STYLESHEET))
 })
 
+test('sheet (C2): no rule targets a bare element or a bare ARIA role', () => {
+  // The narrowed rule set (t34 finding C2). `button`, `[role='button']` and
+  // friends used to be subjects here inside a 1024px block, i.e. every control of
+  // every host surface was resized on any window narrower than the threshold,
+  // with `!important`. A bare subject is now only allowed when another compound
+  // in the same selector carries a declared scope: a `data-*` hook, an id, or this
+  // plugin's own class prefix.
+  const offenders = []
+  for (const rule of sheet.allRules) {
+    for (const selector of rule.selector.split(',').map((part) => part.trim())) {
+      const parts = tokenizeSelector(selector)
+      const subject = parts[parts.length - 1].compound
+      if (!isBareCompound(subject)) continue
+      const scoped = parts
+        .slice(0, -1)
+        .some(({ compound }) => /\[data-|#[\w-]|\.dmr-/.test(compound))
+      if (!scoped) offenders.push(selector)
+    }
+  }
+  assert.deepEqual(offenders, [], `unscoped bare selectors: ${offenders.join(' | ')}`)
+
+  // The exact fragments the fix removed may not come back through any other rule
+  // either — a global `[class*='_button_']` is the same bug under another name.
+  for (const fragment of ["_button_", '_iconButton', '_iconBtn', '_toggle', "[role="]) {
+    assert.deepEqual(
+      rowsMentioning(fragment).map((row) => row.selector),
+      [],
+      `${fragment} must not appear in the sheet any more`,
+    )
+  }
+})
+
+test('sheet (C2): the narrowing is observable — host controls unscoped, ours scoped', () => {
+  // A host control with no declared hook: any `<button>` of any surface, plus the
+  // shared Button class the sheet used to match by local name.
+  const hostButton = new FakeNode('button', { class: 'x7Yq1A_button_9f3k2' })
+  const hostIcon = new FakeNode('button', { class: '_2H3hWW_iconButton _2H3hWW_toggle' })
+  for (const viewport of [390, 1024]) {
+    assert.deepEqual([...appliedTo(sheet, hostButton, viewport).keys()], [])
+    assert.deepEqual([...appliedTo(sheet, hostIcon, viewport).keys()], [])
+  }
+
+  // The declared dockkit tab keeps its 40px box…
+  const tab = new FakeNode('button', { 'data-dockkit-tab': '' })
+  assert.equal(appliedTo(sheet, tab, 1024).get('min-height'), '40px')
+  assert.equal(appliedTo(sheet, tab, 1024).get('min-width'), '40px')
+
+  // …and this plugin's own controls keep theirs, reached through our own
+  // attribute rather than through a host class we would be guessing at.
+  const panel = new FakeNode('div', { 'data-dsh-mobile-remote': 'panel' })
+  const ownButton = panel.appendChild(new FakeNode('button', { class: 'dmr-action' }))
+  assert.equal(appliedTo(sheet, ownButton, 1024).get('min-height'), '40px')
+  // …and nothing else: the rule is a height floor for our own controls, not a box.
+  const sibling = panel.appendChild(new FakeNode('a', { class: 'dmr-action', 'data-dmr-action': 'copy' }))
+  assert.deepEqual([...appliedTo(sheet, sibling, 1024).keys()], ['min-height'])
+})
+
 test('sheet: the five acceptance targets each have a locating rule', () => {
   const centre = rowsMentioning("_centerCol")
   assert.ok(centre.some((row) => row.property === 'width' && row.value === '100%'))
@@ -708,13 +902,14 @@ test('sheet: the five acceptance targets each have a locating rule', () => {
     rowsMentioning('_tabLayoutDivider').some((row) => row.property === 'display' && row.value === 'none'),
   )
 
-  const iconButton = rowsMentioning('_iconButton')
-  assert.ok(iconButton.some((row) => row.property === 'min-width' && row.value === '40px'))
-  assert.ok(iconButton.some((row) => row.property === 'min-height' && row.value === '40px'))
+  // Touch targets: the declared dockkit tab plus this plugin's own subtree — the
+  // narrowed set (t34 finding C2; the host-global selectors this used to assert
+  // are gone, see the two tests above).
   const dockTab = rowsMentioning('data-dockkit-tab')
   assert.ok(dockTab.some((row) => row.property === 'min-height' && row.value === '40px'))
-  const sharedButton = rowsMentioning("_button_")
-  assert.ok(sharedButton.some((row) => row.property === 'min-height' && row.value === '40px'))
+  assert.ok(dockTab.some((row) => row.property === 'min-width' && row.value === '40px'))
+  const ours = rowsMentioning('[data-dsh-mobile-remote]')
+  assert.ok(ours.some((row) => row.property === 'min-height' && row.value === '40px'))
 
   // Collapse is reused, not re-invented: the state carrier DSH writes is what
   // the sheet keys off, and there is no rule that ever shows a sidebar control.
@@ -770,10 +965,12 @@ test('sheet (F2): the dockkit strip chain grows with its 40px controls', () => {
     rowsMentioning('_stripChrome').some((row) => row.property === 'height' && row.value === '40px'),
     'the chrome row holding the icon buttons must match',
   )
-  // The controls themselves keep their 40px (the reason the strip had to grow).
-  const iconButton = rowsMentioning('_iconButton')
-  assert.ok(iconButton.some((row) => row.property === 'min-height' && row.value === '40px'))
+  // The control that is still resized is the declared tab (the reason the strip
+  // had to grow). The chrome row's icon buttons are deliberately **no longer**
+  // resized: they expose no hook, so the narrowed sheet leaves them alone
+  // (t34 C2) — the chrome row simply keeps step with the strip.
   assert.ok(rowsMentioning('data-dockkit-tab').some((row) => row.property === 'min-height' && row.value === '40px'))
+  assert.deepEqual(rowsMentioning('_iconButton'), [], 'the global icon-button rule is gone (C2)')
 })
 
 // ---------------------------------------------------------------------------
@@ -791,9 +988,11 @@ test('switch: the host tiers decide, and the query can only subtract (fail-safe)
   const document = new FakeDocument(tree.html)
   const meta = new FakeNode('meta', { name: mobileCss.MOBILE_CSS_META_NAME, content: '0' })
   tree.head.appendChild(meta)
-  const script = tree.body.children.find((node) => node.tag === 'script')
 
   const hostEnabled = { [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: true } }
+  // `?mobileCss=0` rides on this module's own URL; since t34 C1 the tests hand it
+  // in the way production captures it (the DOM holds no such script tag).
+  const queryOff = `${BUNDLE_URL}&mobileCss=0`
 
   // Host tiers, without any query.
   assert.deepEqual(mobileCss.readMobileCssFlag({ document, hostGlobal: hostEnabled }), {
@@ -812,46 +1011,180 @@ test('switch: the host tiers decide, and the query can only subtract (fail-safe)
   })
 
   // `?mobileCss=0` turns the layer off even when the host allows it.
-  script.setAttribute('src', 'plugins/??dsh-mobile-remote/client.js&rev=abc&mobileCss=0')
-  assert.deepEqual(mobileCss.readMobileCssFlag({ document, hostGlobal: hostEnabled }), {
+  assert.deepEqual(mobileCss.readMobileCssFlag({ document, moduleUrl: queryOff, hostGlobal: hostEnabled }), {
     enabled: false,
     source: 'query',
   })
 
   // `?mobileCss=1` cannot re-enable a layer the host switched off (t13 F4).
-  script.setAttribute('src', 'plugins/??dsh-mobile-remote/client.js&rev=abc&mobileCss=1')
   assert.deepEqual(
-    mobileCss.readMobileCssFlag({ document, hostGlobal: { [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: false } } }),
+    mobileCss.readMobileCssFlag({
+      document,
+      moduleUrl: `${BUNDLE_URL}&mobileCss=1`,
+      hostGlobal: { [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: false } },
+    }),
     { enabled: false, source: 'global', ignoredQuery: true },
   )
   // …and says nothing when the query agrees with the host.
-  assert.deepEqual(mobileCss.readMobileCssFlag({ document, hostGlobal: hostEnabled }), {
-    enabled: true,
-    source: 'global',
-  })
+  assert.deepEqual(
+    mobileCss.readMobileCssFlag({ document, moduleUrl: `${BUNDLE_URL}&mobileCss=1`, hostGlobal: hostEnabled }),
+    { enabled: true, source: 'global' },
+  )
 
-  // A query on an unrelated script is ignored.
-  script.setAttribute('src', 'plugins/??other-plugin/client.js&mobileCss=0')
-  assert.deepEqual(mobileCss.readMobileCssFlag({ document, hostGlobal: hostEnabled }), {
-    enabled: true,
-    source: 'global',
-  })
+  // A query on an unrelated resource is ignored.
+  assert.deepEqual(
+    mobileCss.readMobileCssFlag({
+      document,
+      moduleUrl: 'https://example.test/plugins/??other-plugin/client.js&mobileCss=0',
+      hostGlobal: hostEnabled,
+    }),
+    { enabled: true, source: 'global' },
+  )
 })
 
 test('switch (F4): a URL cannot re-open the layer the host closed', () => {
-  const tree = buildTree()
-  const document = new FakeDocument(tree.html)
-  const script = tree.body.children.find((node) => node.tag === 'script')
+  const document = new FakeDocument(buildTree().html)
   const closed = { [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: false } }
 
   for (const query of ['mobileCss=1', 'mobileCss=true', 'mobileCss=on', 'mobileCss=yes']) {
-    script.setAttribute('src', `plugins/??dsh-mobile-remote/client.js&rev=abc&${query}`)
-    const flag = mobileCss.readMobileCssFlag({ document, hostGlobal: closed })
+    const environment = { document, moduleUrl: `${BUNDLE_URL}&${query}`, hostGlobal: closed }
+    const flag = mobileCss.readMobileCssFlag(environment)
     assert.equal(flag.enabled, false, `${query} must not re-enable the layer`)
     assert.equal(flag.ignoredQuery, true)
     // And the switched-off contract still holds end to end for that page.
-    assert.equal(mobileCss.mobileCssText({ document, hostGlobal: closed }), '')
+    assert.equal(mobileCss.mobileCssText(environment), '')
   }
+})
+
+// ---------------------------------------------------------------------------
+// 2b. The capture that makes `?mobileCss=` reachable (t34 finding C1)
+// ---------------------------------------------------------------------------
+
+test('capture (C1): the override survives the loader removing the <script> element', () => {
+  const tree = buildTree()
+  const document = new FakeDocument(tree.html)
+  const loaded = loadBundleScript(tree.body, `${BUNDLE_URL}&mobileCss=0`)
+  // The production shape, asserted: the element the old DOM scan looked for is
+  // gone before anything in this module runs (evidence :451-458 vs :17-21).
+  assert.equal(document.querySelectorAll('script[src]').length, 0)
+  assert.equal(loaded.parent, undefined)
+
+  const hostEnabled = { [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: true } }
+
+  // Tier 3: the browser's own load record — the tier that makes the flag fire in
+  // production, where the DOM no longer holds the tag and `currentScript` is null.
+  assert.deepEqual(
+    mobileCss.readMobileCssFlag({
+      document,
+      performance: loadedResources(`${BUNDLE_URL}&mobileCss=0`),
+      hostGlobal: hostEnabled,
+    }),
+    { enabled: false, source: 'query' },
+  )
+  // The same page, with the host's own value to compare against: no record → no
+  // override → the host tier decides.
+  assert.deepEqual(mobileCss.readMobileCssFlag({ document, performance: noResources(), hostGlobal: hostEnabled }), {
+    enabled: true,
+    source: 'global',
+  })
+
+  // Tier 2: `document.currentScript` — the factory executed while its script ran.
+  // A real `HTMLScriptElement.src` is the *resolved* absolute URL, query included.
+  const executing = new FakeDocument(buildTree().html)
+  executing.currentScript = { src: `${BUNDLE_URL}&mobileCss=0` }
+  assert.deepEqual(mobileCss.readMobileCssFlag({ document: executing, hostGlobal: hostEnabled }), {
+    enabled: false,
+    source: 'query',
+  })
+
+  // Tier 1: an explicitly named URL wins over the page and over a stale capture.
+  assert.deepEqual(
+    mobileCss.readMobileCssFlag({ document, moduleUrl: `${BUNDLE_URL}&mobileCss=0`, hostGlobal: hostEnabled }),
+    { enabled: false, source: 'query' },
+  )
+  assert.deepEqual(
+    mobileCss.readMobileCssFlag({
+      document,
+      moduleUrl: BUNDLE_URL,
+      performance: loadedResources(`${BUNDLE_URL}&mobileCss=0`),
+      hostGlobal: hostEnabled,
+    }),
+    { enabled: true, source: 'global' },
+    'an environment that names its URL is not second-guessed by the page record',
+  )
+
+  // An unrelated resource that happens to be recorded is not this module's URL.
+  assert.deepEqual(
+    mobileCss.readMobileCssFlag({
+      document,
+      performance: loadedResources('https://example.test/plugins/??other-plugin/client.js&mobileCss=0'),
+      hostGlobal: hostEnabled,
+    }),
+    { enabled: true, source: 'global' },
+  )
+})
+
+test('capture (C1): the newest load record wins, so an HMR reload beats the old rev', () => {
+  const document = new FakeDocument(buildTree().html)
+  const hostEnabled = { [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: true } }
+  const first = `${BUNDLE_URL}&mobileCss=1`
+  const second = `${BUNDLE_URL}&rev=def&mobileCss=0`
+  assert.deepEqual(
+    mobileCss.readMobileCssFlag({
+      document,
+      // Resource timing appends: the last entry is the bundle that is running.
+      performance: loadedResources(first, second),
+      hostGlobal: hostEnabled,
+    }),
+    { enabled: false, source: 'query' },
+  )
+})
+
+test('capture (C1): a capture that finds nothing is "no flag", never a remembered no', () => {
+  const tree = buildTree()
+  const document = new FakeDocument(tree.html)
+  const hostEnabled = { [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: true } }
+
+  // Before any load record exists the page answers nothing, and the host tier
+  // decides — the fail-safe direction (the query may only ever subtract).
+  assert.equal(mobileCss.captureModuleUrl({ document, performance: noResources() }), undefined)
+  assert.deepEqual(mobileCss.readMobileCssFlag({ document, performance: noResources(), hostGlobal: hostEnabled }), {
+    enabled: true,
+    source: 'global',
+  })
+
+  // Once the loader has run, the same question gets the recorded URL — this is
+  // what `apply()` captures and hands down.
+  loadBundleScript(tree.body, `${BUNDLE_URL}&mobileCss=0`)
+  assert.equal(
+    mobileCss.captureModuleUrl({ document, performance: loadedResources(`${BUNDLE_URL}&mobileCss=0`) }),
+    `${BUNDLE_URL}&mobileCss=0`,
+  )
+  assert.deepEqual(
+    mobileCss.readMobileCssFlag({
+      document,
+      moduleUrl: mobileCss.captureModuleUrl({ document, performance: loadedResources(`${BUNDLE_URL}&mobileCss=0`) }),
+      hostGlobal: hostEnabled,
+    }),
+    { enabled: false, source: 'query' },
+  )
+
+  // An environment that names the key answers for itself: the page is not read.
+  const neverAsked = {
+    document: {
+      querySelector: () => null,
+      createElement: () => {
+        throw new Error('the page must not be touched for an explicitly named URL')
+      },
+      head: { appendChild: () => {} },
+      documentElement: tree.html,
+    },
+    moduleUrl: undefined,
+  }
+  assert.deepEqual(mobileCss.readMobileCssFlag({ ...neverAsked, hostGlobal: hostEnabled }), {
+    enabled: true,
+    source: 'global',
+  })
 })
 
 test('switch: written word forms are understood in both directions', () => {
@@ -1232,6 +1565,62 @@ test('mounting: mobileCss=false still mounts the card, and injects no narrow-scr
   })
 })
 
+test('mounting (C1): apply() honours the override with the <script> element already gone', () => {
+  // The production sequence, end to end: the loader loads the bundle (and removes
+  // the element), the factory materializes, `apply` runs. The old DOM-scan read of
+  // the flag could not see the tag here — this is the test that used to keep the
+  // fake script in the tree forever.
+  const tree = buildTree()
+  const document = new FakeDocument(tree.html)
+  const url = `${BUNDLE_URL}&mobileCss=0`
+  loadBundleScript(tree.body, url)
+  assert.equal(document.querySelectorAll('script[src]').length, 0, 'the loader removes the element on load')
+
+  withGlobals(
+    { document, performance: loadedResources(url), [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: true } },
+    () => {
+      const disposers = []
+      const ctx = {
+        effect(callback) {
+          disposers.push(callback())
+        },
+        inject() {},
+        slots: { inject() {}, register() {} },
+      }
+      clientHalf.apply(ctx)
+      // The host allows the layer, the URL subtracts it: the card is the only sheet.
+      assert.deepEqual(
+        document.querySelectorAll('style').map((tag) => styleIdentity(tag)),
+        ['dsh-mobile-remote-card-style'],
+      )
+      assert.equal(tree.html.style.properties.has(mobileCss.KEYBOARD_INSET_VAR), false)
+      for (const dispose of disposers) dispose()
+      assert.equal(document.querySelectorAll('style').length, 0)
+    },
+  )
+
+  // The same page without the query keeps the layer: the capture must not turn
+  // "no override" into "off".
+  withGlobals(
+    { document, performance: loadedResources(BUNDLE_URL), [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: true } },
+    () => {
+      const disposers = []
+      clientHalf.apply({
+        effect(callback) {
+          disposers.push(callback())
+        },
+        inject() {},
+        slots: { inject() {}, register() {} },
+      })
+      assert.deepEqual(
+        document.querySelectorAll('style').map((tag) => styleIdentity(tag)).sort(),
+        ['dsh-mobile-remote-card-style', 'dsh-mobile-remote-style'],
+      )
+      for (const dispose of disposers) dispose()
+    },
+  )
+})
+
 // ---------------------------------------------------------------------------
 // 5. The keyboard hand-off
 // ---------------------------------------------------------------------------
@@ -1243,12 +1632,17 @@ test('keyboard: visualViewport shortfall drives the variable and the html attrib
   const window = fakeWindow(visualViewport, 800)
   const dispose = mobileCss.installKeyboardAvoidance({ document, window })
 
+  // A measurement lands on the next animation frame, not on the event itself
+  // (t34 finding C6): `measure()` is one frame, which is what `runFrame()` runs.
+  const measure = () => window.runFrame()
+
   assert.equal(tree.html.style.properties.get(mobileCss.KEYBOARD_INSET_VAR), '0px')
   assert.equal(tree.html.getAttribute(mobileCss.KEYBOARD_STATE_ATTR), null)
 
   // The keyboard opens: Chrome's default resizes-visual leaves innerHeight alone.
   visualViewport.height = 450
   visualViewport.emit('resize')
+  measure()
   assert.equal(tree.html.style.properties.get(mobileCss.KEYBOARD_INSET_VAR), '350px')
   assert.equal(tree.html.getAttribute(mobileCss.KEYBOARD_STATE_ATTR), 'true')
 
@@ -1256,12 +1650,14 @@ test('keyboard: visualViewport shortfall drives the variable and the html attrib
   visualViewport.height = 500
   visualViewport.offsetTop = 40
   visualViewport.emit('scroll')
+  measure()
   assert.equal(tree.html.style.properties.get(mobileCss.KEYBOARD_INSET_VAR), '260px')
 
   // Closed again.
   visualViewport.height = 800
   visualViewport.offsetTop = 0
   visualViewport.emit('resize')
+  measure()
   assert.equal(tree.html.style.properties.get(mobileCss.KEYBOARD_INSET_VAR), '0px')
   assert.equal(tree.html.getAttribute(mobileCss.KEYBOARD_STATE_ATTR), null)
 
@@ -1282,11 +1678,13 @@ test('keyboard: browser chrome below the threshold never lifts the layout', () =
   assert.equal(mobileCss.KEYBOARD_MIN_INSET_PX, 120)
   visualViewport.height = 800 - 60
   visualViewport.emit('resize')
+  window.runFrame()
   assert.equal(tree.html.style.properties.get(mobileCss.KEYBOARD_INSET_VAR), '0px')
   assert.equal(tree.html.getAttribute(mobileCss.KEYBOARD_STATE_ATTR), null)
 
   visualViewport.height = 800 - mobileCss.KEYBOARD_MIN_INSET_PX
   visualViewport.emit('resize')
+  window.runFrame()
   assert.equal(tree.html.getAttribute(mobileCss.KEYBOARD_STATE_ATTR), 'true')
 
   dispose()
@@ -1319,6 +1717,228 @@ test('keyboard: the static assertion that ties the JS to the sheet', () => {
   assert.equal(tree.center.walk().some((node) => node.getAttribute('data-composer-seat') !== null), true)
 })
 
+test('keyboard (C6): viewport events coalesce into one frame and are registered passive', () => {
+  const tree = buildTree()
+  const document = new FakeDocument(tree.html)
+  const visualViewport = fakeVisualViewport(800, 0)
+  const window = fakeWindow(visualViewport, 800)
+  const dispose = mobileCss.installKeyboardAvoidance({ document, window })
+
+  // The first measurement is immediate: the first paint must already be right.
+  assert.equal(tree.html.style.properties.get(mobileCss.KEYBOARD_INSET_VAR), '0px')
+  assert.equal(window.pendingFrames(), 0)
+
+  // A burst — dragging the mobile URL bar emits several scroll events per frame,
+  // and a resize can land in the same frame — costs one frame, one measurement.
+  visualViewport.height = 450
+  visualViewport.emit('scroll')
+  visualViewport.emit('scroll')
+  visualViewport.emit('scroll')
+  visualViewport.emit('resize')
+  assert.equal(window.pendingFrames(), 1, 'the burst must coalesce into a single frame')
+  // Nothing is written before the frame runs: that is the coalescing.
+  assert.equal(tree.html.style.properties.get(mobileCss.KEYBOARD_INSET_VAR), '0px')
+  assert.equal(window.runFrame(), 1)
+  assert.equal(tree.html.style.properties.get(mobileCss.KEYBOARD_INSET_VAR), '350px')
+  assert.equal(tree.html.getAttribute(mobileCss.KEYBOARD_STATE_ATTR), 'true')
+
+  // A window resize goes through the same scheduler (and the same single frame).
+  visualViewport.height = 800
+  window.emit('resize', undefined)
+  assert.equal(window.pendingFrames(), 1)
+  window.runFrame()
+  assert.equal(tree.html.getAttribute(mobileCss.KEYBOARD_STATE_ATTR), null)
+
+  // Passive everywhere: none of these listeners ever calls preventDefault, and
+  // saying so lets the engine keep scrolling while the handler is queued.
+  for (const registrations of [
+    visualViewport.registrations('resize'),
+    visualViewport.registrations('scroll'),
+    window.registrations('resize'),
+  ]) {
+    assert.equal(registrations.length, 1)
+    assert.equal(registrations[0]?.passive, true)
+  }
+
+  // A frame still pending at unmount is cancelled, so nothing writes after it.
+  visualViewport.height = 300
+  visualViewport.emit('resize')
+  assert.equal(window.pendingFrames(), 1)
+  dispose()
+  assert.equal(window.pendingFrames(), 0, 'a scheduled frame must be cancelled on dispose')
+  assert.equal(visualViewport.count(), 0)
+  assert.equal(window.listenerCount(), 0)
+  assert.equal(tree.html.style.properties.has(mobileCss.KEYBOARD_INSET_VAR), false)
+  assert.equal(tree.html.getAttribute(mobileCss.KEYBOARD_STATE_ATTR), null)
+})
+
+test('keyboard (C6): without frame scheduling the sync degrades to the inline write', () => {
+  // `node --test` has no `requestAnimationFrame`, and neither has SSR: the
+  // coalescing must then fall back to measuring on the event itself rather than
+  // dropping the update.
+  const tree = buildTree()
+  const document = new FakeDocument(tree.html)
+  const visualViewport = fakeVisualViewport(800, 0)
+  const bare = { visualViewport, innerHeight: 800 }
+  const dispose = mobileCss.installKeyboardAvoidance({ document, window: bare })
+
+  visualViewport.height = 450
+  visualViewport.emit('resize')
+  assert.equal(tree.html.style.properties.get(mobileCss.KEYBOARD_INSET_VAR), '350px')
+  assert.doesNotThrow(() => dispose())
+})
+
+// ---------------------------------------------------------------------------
+// 5b. The drawer dismissal (t34 finding C5)
+// ---------------------------------------------------------------------------
+
+test('drawer (C5): Escape presses the host’s own collapse switch on a narrow screen', () => {
+  const tree = buildTree({ collapsed: false })
+  const document = new FakeDocument(tree.html)
+  const window = fakeWindow(fakeVisualViewport(800, 0), 800, { narrow: true })
+  const dispose = mobileCss.installDrawerDismiss({ document, window })
+
+  const toggle = document.querySelector(mobileCss.DRAWER_TOGGLE_SELECTOR)
+  assert.ok(toggle, 'the host toggle must be reachable through the documented anchor')
+  assert.equal(toggle.clicks, 0)
+  assert.equal(window.listenerCount('keydown'), 1)
+
+  // Escape: the drawer is drawn (the frame has no collapsed marker), so the host's
+  // own button is pressed — the collapse stays DSH's state, not ours.
+  window.emit('keydown', { key: 'Escape' })
+  assert.equal(toggle.clicks, 1)
+
+  // An Escape another handler already consumed stays theirs (a modal, the shell).
+  window.emit('keydown', { key: 'Escape', defaultPrevented: true })
+  assert.equal(toggle.clicks, 1)
+
+  // Other keys are not ours at all.
+  window.emit('keydown', { key: 'Enter' })
+  window.emit('keydown', {})
+  window.emit('keydown', undefined)
+  assert.equal(toggle.clicks, 1)
+
+  dispose()
+  assert.equal(window.listenerCount('keydown'), 0, 'the dismissal listener must not survive unmount')
+  window.emit('keydown', { key: 'Escape' })
+  assert.equal(toggle.clicks, 1, 'nothing may happen after the disposer ran')
+})
+
+test('drawer (C5): the dismissal fails safe on a wide window, a closed drawer, or no switch', () => {
+  // (a) A wide window has an ordinary expanded sidebar, not a drawer: Escape must
+  // leave it exactly as it is.
+  const wide = buildTree({ collapsed: false })
+  const wideDocument = new FakeDocument(wide.html)
+  const wideWindow = fakeWindow(fakeVisualViewport(800, 0), 800)
+  const disposeWide = mobileCss.installDrawerDismiss({ document: wideDocument, window: wideWindow })
+  const wideToggle = wideDocument.querySelector(mobileCss.DRAWER_TOGGLE_SELECTOR)
+  assert.ok(wideToggle, 'the fixture carries the host toggle')
+  wideWindow.emit('keydown', { key: 'Escape' })
+  assert.equal(wideToggle.clicks, 0, 'Escape must not collapse the desktop sidebar')
+  disposeWide()
+
+  // (b) The drawer is already closed (the frame carries DSH's collapsed marker).
+  const closed = buildTree({ collapsed: true })
+  const closedDocument = new FakeDocument(closed.html)
+  const closedWindow = fakeWindow(fakeVisualViewport(800, 0), 800, { narrow: true })
+  const disposeClosed = mobileCss.installDrawerDismiss({ document: closedDocument, window: closedWindow })
+  const closedToggle = closedDocument.querySelector(mobileCss.DRAWER_TOGGLE_SELECTOR)
+  closedWindow.emit('keydown', { key: 'Escape' })
+  assert.equal(closedToggle.clicks, 0, 'there is no drawer to dismiss while collapsed')
+  disposeClosed()
+
+  // (c) A host that exposes no switch: fail safe, never throw.
+  const bare = new FakeDocument(buildTree({ collapsed: false }).html)
+  const bareWindow = fakeWindow(fakeVisualViewport(800, 0), 800, { narrow: true })
+  bare.querySelector = (selector) =>
+    selector === mobileCss.DRAWER_FRAME_SELECTOR ? { getAttribute: () => null } : null
+  const disposeBare = mobileCss.installDrawerDismiss({ document: bare, window: bareWindow })
+  assert.doesNotThrow(() => bareWindow.emit('keydown', { key: 'Escape' }))
+  disposeBare()
+
+  // (d) No document (SSR) installs nothing at all.
+  const noneWindow = fakeWindow(fakeVisualViewport(800, 0), 800, { narrow: true })
+  const noneDispose = mobileCss.installDrawerDismiss({ window: noneWindow })
+  assert.equal(noneWindow.listenerCount('keydown'), 0)
+  assert.doesNotThrow(() => noneDispose())
+
+  // (e) The narrow question is asked of the engine, with the sheet's own query.
+  assert.equal(mobileCss.NARROW_MEDIA_QUERY, `(max-width: ${mobileCss.MOBILE_BREAKPOINT_PX}px)`)
+  const asked = []
+  const askingWindow = fakeWindow(fakeVisualViewport(800, 0), 800, { narrow: true })
+  const originalMatchMedia = askingWindow.matchMedia
+  askingWindow.matchMedia = (query) => {
+    asked.push(query)
+    return originalMatchMedia(query)
+  }
+  const askingDispose = mobileCss.installDrawerDismiss({
+    document: new FakeDocument(buildTree({ collapsed: false }).html),
+    window: askingWindow,
+  })
+  askingWindow.emit('keydown', { key: 'Escape' })
+  askingDispose()
+  assert.deepEqual(asked, [mobileCss.NARROW_MEDIA_QUERY])
+
+  // (f) An engine that cannot answer the query is not guessed at: the sheet's
+  // media block would decide, and this code has no second opinion, so it stays
+  // out of the way (never collapse a desktop sidebar by accident).
+  const noMedia = fakeWindow(fakeVisualViewport(800, 0), 800, { narrow: true })
+  delete noMedia.matchMedia
+  const noMediaDocument = new FakeDocument(buildTree({ collapsed: false }).html)
+  const noMediaToggle = noMediaDocument.querySelector(mobileCss.DRAWER_TOGGLE_SELECTOR)
+  const disposeNoMedia = mobileCss.installDrawerDismiss({ document: noMediaDocument, window: noMedia })
+  noMedia.emit('keydown', { key: 'Escape' })
+  assert.equal(noMediaToggle.clicks, 0)
+  disposeNoMedia()
+
+  // (g) The hook itself: the sheet's drawer rule and the JS check the same state.
+  assert.equal(mobileCss.DRAWER_FRAME_SELECTOR, "#root > [data-slot='root'] > div:not([data-sidebar-collapsed])")
+  assert.ok(
+    rowsMentioning('data-sidebar-collapsed').some(
+      (row) => row.selector === `${mobileCss.DRAWER_FRAME_SELECTOR} > [class*='_sidebarCol']`,
+    ),
+    'the dismissal and the drawer rule must ask the same question',
+  )
+  assert.match(mobileCss.DRAWER_TOGGLE_SELECTOR, /^\[data-slot='sidebar'\] button/)
+})
+
+test('drawer (C5): the layer owns the dismissal listener and releases it with the rest', () => {
+  // Registered and removed on the same lifecycle as the visualViewport listeners:
+  // one disposer, three installers, nothing left behind.
+  const tree = buildTree({ collapsed: false })
+  const document = new FakeDocument(tree.html)
+  const visualViewport = fakeVisualViewport(800, 0)
+  const window = fakeWindow(visualViewport, 800, { narrow: true })
+  const environment = { document, window, hostGlobal: { [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: true } } }
+
+  const dispose = mobileCss.installNarrowScreenLayer(environment)
+  assert.equal(document.querySelectorAll('style').length, 1)
+  assert.equal(window.listenerCount('keydown'), 1)
+  assert.equal(window.listenerCount('resize'), 1)
+  assert.equal(visualViewport.count(), 2)
+
+  const toggle = document.querySelector(mobileCss.DRAWER_TOGGLE_SELECTOR)
+  window.emit('keydown', { key: 'Escape' })
+  assert.equal(toggle.clicks, 1)
+
+  dispose()
+  assert.equal(document.querySelectorAll('style').length, 0)
+  assert.equal(window.listenerCount(), 0, 'no listener may survive the layer disposer')
+  assert.equal(visualViewport.count(), 0)
+
+  // Switched off: not even the dismissal listener is installed.
+  const offTree = buildTree({ collapsed: false })
+  const offDocument = new FakeDocument(offTree.html)
+  const offWindow = fakeWindow(fakeVisualViewport(800, 0), 800, { narrow: true })
+  const disposeOff = mobileCss.installNarrowScreenLayer({
+    document: offDocument,
+    window: offWindow,
+    hostGlobal: { [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: false } },
+  })
+  assert.equal(offWindow.listenerCount(), 0)
+  assert.doesNotThrow(() => disposeOff())
+})
+
 // ---------------------------------------------------------------------------
 // 6. The built artifact: the sheet ships, and the terminal guards hold
 // ---------------------------------------------------------------------------
@@ -1340,22 +1960,25 @@ test('artifact: the built bundle actually installs the sheet when driven through
   })
   assert.deepEqual(exports.inject, ['slots'])
 
-  const run = (mobileCssFlag) => {
+  const run = (mobileCssFlag, resources = noResources()) => {
     const tree = buildTree()
     const document = new FakeDocument(tree.html)
-    return withGlobals({ document, [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: mobileCssFlag } }, () => {
-      const disposers = []
-      exports.apply({
-        effect(callback) {
-          disposers.push(callback())
-        },
-        inject() {},
-        slots: { inject() {}, register() {} },
-      })
-      const tags = document.querySelectorAll('style')
-      for (const dispose of disposers) dispose()
-      return tags
-    })
+    return withGlobals(
+      { document, performance: resources, [mobileCss.GLOBAL_CONFIG_NAME]: { mobileCss: mobileCssFlag } },
+      () => {
+        const disposers = []
+        exports.apply({
+          effect(callback) {
+            disposers.push(callback())
+          },
+          inject() {},
+          slots: { inject() {}, register() {} },
+        })
+        const tags = document.querySelectorAll('style')
+        for (const dispose of disposers) dispose()
+        return tags
+      },
+    )
   }
 
   const on = run(true)
@@ -1369,6 +1992,16 @@ test('artifact: the built bundle actually installs the sheet when driven through
     off.map((tag) => styleIdentity(tag)),
     ['dsh-mobile-remote-card-style'],
     'mobileCss=false must reach the built bundle and inject no narrow-screen node',
+  )
+
+  // t34 C1 through the shipped bytes: the host allows the layer, the page's own
+  // load record says `?mobileCss=0`, and the element is long gone — the bundle
+  // must still subtract the layer, and only the layer.
+  const queried = run(true, loadedResources(`${BUNDLE_URL}&mobileCss=0`))
+  assert.deepEqual(
+    queried.map((tag) => styleIdentity(tag)),
+    ['dsh-mobile-remote-card-style'],
+    'the built bundle must honour ?mobileCss=0 from the captured module URL',
   )
 })
 

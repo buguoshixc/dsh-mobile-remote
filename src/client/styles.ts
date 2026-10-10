@@ -70,8 +70,21 @@ const CARD_CSS = `
 [data-dsh-mobile-remote='pair-card'] { min-width: 0; }
 
 .dmr-status { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+/* The three tones the card actually emits (pair-card.ts 'cardBody'): 'ok' on the
+   ready state, 'error' on a failure, 'busy' while loading. Every one of them must
+   be themed here or the state inherits the neutral colour and reads as noise —
+   'ok' was missing (t34 finding C3). The success token is the shipped one for a
+   success surface (--dsw-alias-state-success-primary, the same alias
+   plugin-manager's result box uses). */
 .dmr-status[data-dmr-tone='error'] { color: var(--dsw-alias-state-error-primary); }
 .dmr-status[data-dmr-tone='busy'] { color: var(--dsw-alias-label-tertiary); }
+.dmr-status[data-dmr-tone='ok'] { color: var(--dsw-alias-state-success-primary); }
+/* The clipboard fallback sentence (copy button, t34 finding C4) shares the detail
+   line's size but must not read as a mere note: it is the instruction the user
+   has to follow when the browser exposes no clipboard. It is a child of
+   '.dmr-actions' (a wrapping flex row), so 'flex-basis: 100%' gives it a row of
+   its own instead of squeezing in beside the buttons. */
+.dmr-copy-note { flex-basis: 100%; margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-warn-label, var(--dsw-alias-label-secondary)); overflow-wrap: anywhere; }
 .dmr-detail { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); overflow-wrap: anywhere; }
 
 .dmr-url {

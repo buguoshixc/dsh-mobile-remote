@@ -562,6 +562,11 @@ export function encodeQr(text: string): QrMatrix {
  * @param version - the QR version to use.
  * @param mask - pin this mask (0–7) instead of searching for the best one.
  * @returns the masked matrix.
+ * @throws RangeError when `mask` is outside 0–7. The mask used to be folded with
+ *   `mask & 7`, so an out-of-contract value was silently *reduced* to a different
+ *   mask (9 became 1, 100 became 4) and the caller got a matrix it had not asked
+ *   for; a pinned-mask API has to fail loudly instead (t34 finding C7). Nothing in
+ *   the UI passes a mask, so this only ever fires for a caller.
  */
 export function encodeBytes(bytes: readonly number[], version: number, mask?: number): QrMatrix {
   if (version < 1 || version > MAX_VERSION) {
@@ -570,13 +575,16 @@ export function encodeBytes(bytes: readonly number[], version: number, mask?: nu
   if (bytes.length > byteCapacity(version)) {
     throw new QrCapacityError(`payload of ${bytes.length} bytes does not fit version ${version}`, bytes.length)
   }
+  if (mask !== undefined && (!Number.isInteger(mask) || mask < 0 || mask > 7)) {
+    throw new RangeError(`QR mask ${String(mask)} is not a mask (expected an integer 0–7)`)
+  }
 
   const size = 17 + 4 * version
   const codewords = buildCodewords(bytes, version)
 
   let best: { mask: number; canvas: Canvas; score: number } | undefined
   for (let candidate = 0; candidate < 8; candidate += 1) {
-    if (mask !== undefined && candidate !== (mask & 7)) continue
+    if (mask !== undefined && candidate !== mask) continue
     const canvas: Canvas = { size, dark: new Uint8Array(size * size), fixed: new Uint8Array(size * size) }
     drawFunctionPatterns(canvas, version)
     drawFormatBits(canvas, candidate)
@@ -585,7 +593,14 @@ export function encodeBytes(bytes: readonly number[], version: number, mask?: nu
     if (best === undefined || score < best.score) best = { mask: candidate, canvas, score }
   }
 
-  const chosen = best as { mask: number; canvas: Canvas; score: number }
+  if (best === undefined) {
+    // Unreachable while the range guard above holds (`mask` pins exactly one
+    // candidate, and the search always runs eight). Kept total so the old
+    // `best as …` cast — which threw a bare TypeError at the first read — has no
+    // successor here.
+    throw new RangeError(`QR mask ${String(mask)} produced no candidate`)
+  }
+  const chosen = best
   const modules: boolean[][] = []
   for (let row = 0; row < size; row += 1) {
     const line: boolean[] = []

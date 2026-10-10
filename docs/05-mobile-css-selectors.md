@@ -398,3 +398,19 @@ $c=Get-Content 'D:\work\dsh\pro\_recon\notes\app.css' -Raw; "app.css !important 
 3. **新增证据引用**：`dsh-client-ui-sidebar-right.js:5727` 的 `autoFullscreen = viewportWidth < 768`（04b 未收录）——这是窄屏右栏自动全屏的依据，现已归档（`docs/evidence/mobile/dsh-client-ui-sidebar-right__lib__client.js`）。
 4. **t26 修正（自己此前的判断）**：曾以"`100vw` 会带滚动条宽度溢出"为由把右栏面板宽度覆盖成 `100%`（旧 2.1）。实测该规则**解析成 0**（面板的定位上下文是零宽的第三条轨道）并把面板整个弄没，故已删除——`100vw` 的亚像素溢出远轻于"面板消失"，且 frame 的 `overflow:hidden` 本来就会收口。教训：**内联几何的代价值必须量，不能推**。
 5. **t26 新增归档**：`docs/evidence/mobile/`（`MANIFEST.txt` + 3 个 byte 副本 + 3 个派生摘录 + `EXTRACTION-RECIPE.ps1`），把原先只在 `_recon` 里的 7 组证据纳入文档证据基准（T-10）。
+
+---
+
+## 附录 · t33 触控目标收敛更正（append-only）
+
+> 本文件 §1 的选择器登记表、以及 `docs/04b-mobile-dom-inventory.md` §6.2 的第 1/3/4/5 行，记录的是 **t5/t26 当时的验收策略**——"用全局选择器把宿主所有控件抬到 40px"。**t33 已把这批全局选择器收窄**；两者不一致时，**以本节与代码为准**。
+
+**删掉了什么**：从 `@media (max-width: 1024px)` 的触控目标规则里移除裸元素与裸 ARIA 选择器 `button`、`[role='button']`、`[role='menuitem']`、`[role='menuitemradio']`、`[role='option']`、`[role='treeitem']`、`[role='tab']`，以及泛化的哈希片段 `[class*='_button_']`、`[class*='_iconButton']`、`[class*='_iconBtn']`、`[class*='_toggle']`。
+
+**为什么**：那条规则带 `!important` 且不限作用域，于是**任何 ≤1024px 的窗口**（包括桌面把窗口拉窄）里，宿主**每一个**插件、每一处核心界面的控件都被改尺寸，且宿主无法覆盖。这是本插件对宿主 GUI 影响面最大的一处缺陷。
+
+**现在只作用于**：宿主自己声明的钩子 `[data-dockkit-tab]`（以及仍在其下的 `_tabClose`）、dockkit 的 strip 链，和本插件自己的子树 `[data-dsh-mobile-remote] button` / `a[data-dmr-action]`。
+
+**代价（须知情）**：不再暴露 `data-*` 钩子的宿主控件**拿不到 40px 触控目标**——这是为了不破坏宿主界面而**有意接受**的代价，模块头部的硬规则 5 与规则 4.1 的注释都写明了。
+
+**出处**：实现 `src/client/mobile-css.ts`（规则 4.1/4.2、模块头规则 5）；测试 `test/client-mobile-css.test.mjs` 的"裸选择器守卫"与"宿主 button/toggle 零声明、钩子与自有子树保 40px"两例。

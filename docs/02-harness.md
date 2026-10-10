@@ -296,7 +296,7 @@ RESULT: PASS
 2. **PowerShell 不等待 GUI 子系统进程**：`& 'D:\DSHD\DeepSeek Harness.exe' ...` 立即返回、`$LASTEXITCODE` 为空。用 `Start-Process -Wait -PassThru` 或 `$p.WaitForExit(ms)`。
 3. **`Start-Process -Wait` 会连子孙进程一起等**：测试台故意让 scratch 实例常驻，于是 `-Wait` 会永远挂着。用 `-PassThru` + `$p.WaitForExit(180000)`（脚本 `verify-harness.ps1` 的 `Run`）。
 4. **捕获输出（`$x = & ...` 或管道）会因孙进程继承管道写端而挂死**：scratch 实例继承父进程的 stdout 管道写端并长期持有，捕获方要等 EOF → 直到实例退出才返回。改用**文件重定向**。
-5. **Windows PowerShell 5.1 以 ANSI 读 `.ps1`（无 BOM 时）**：`C:\Users\user\...` 曾被打成 `C:\Users\user\...`（`bundled node not found: C:\Users\user\...`）。因此 `tools\harness\*.ps1` **保持纯 ASCII**，用户目录用 `$env:USERPROFILE` 派生。
+5. **Windows PowerShell 5.1 以 ANSI 读 `.ps1`（无 BOM 时）**：`C:\Users\user\...` 曾被按 ANSI 解码打成乱码（`bundled node not found: C:\Users\<乱码>\...`）。因此 `tools\harness\*.ps1` **保持纯 ASCII**，用户目录用 `$env:USERPROFILE` 派生。
 6. **路由必须在 `ctx.effect(() => { ... return dispose })` 里注册**：探针首版把 disposer 作为 `apply()` 的返回值。实测该写法在重载后让 `GET /harness-probe` 从 200 变 **400**（webserver 对 handler 抛错回 400；最可能是重载期间旧 fiber 已失效而旧路由仍被命中，**具体机制未定论**）。改成 `ctx.effect` 后 `probe-plugin.log` 里 UNMOUNT/MOUNT 干净成对、HTTP 始终正确。附带证据：`@deepseek-ai/dsh-host-webserver` 自己也是这么做的（`this.ctx.effect(() => async () => {...}, "webServer.listen")`）。
 7. **端口与进程守卫**：`harness.ps1 -Action stop` 只杀"命令行同时含已知 scratch 入口 + `--profile <Profile>` + `--port <Port>`"的进程，并且**永远拒绝**碰 19387 的持有者；实测拒绝信息形态：`refusing to stop PID 6848: not this scratch instance ()`。
 

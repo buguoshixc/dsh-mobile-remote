@@ -174,7 +174,9 @@ export async function readLimitedBody(req: unknown, limit: number): Promise<Body
   const record = (req ?? {}) as { body?: unknown; [Symbol.asyncIterator]?: unknown }
 
   if (typeof record.body === 'string') {
-    return record.body.length > bound ? { ok: false, code: 'too-large' } : { ok: true, text: record.body }
+    // Bytes, not UTF-16 code units: the streaming branch below counts bytes, and
+    // a multi-byte body could otherwise clear the cap by up to 3x (t33).
+    return Buffer.byteLength(record.body, 'utf8') > bound ? { ok: false, code: 'too-large' } : { ok: true, text: record.body }
   }
   if (typeof record[Symbol.asyncIterator] !== 'function') {
     // No body stream at all (GET-shaped stub): an empty body is a valid body.
@@ -220,12 +222,41 @@ export const DEFAULT_CONFIRMATION_COOLDOWN_MS = 0
  */
 export const DEFAULT_MAX_PENDING_ROUNDS = 32
 
+/**
+ * Default bound on remembered round states (t33).
+ *
+ * `states` used to grow without limit: only a successful {@link
+ * SecondConfirmationGate.consume} removed a row, so every `refused` round and
+ * every round approved but never redeemed stayed for the life of the process.
+ * Pressure bounding limits how fast rows arrive, not how long they live.
+ */
+export const DEFAULT_MAX_GATE_STATES = 256
+
+/**
+ * Default lifetime of a settled round, in ms (t33).
+ *
+ * An `approved` row is a bearer permission: while it exists, presenting its id
+ * authorises the action. It used to never expire, so an approval could be
+ * redeemed arbitrarily long after the call it was confirming had gone.
+ */
+export const DEFAULT_SETTLED_TTL_MS = 600_000
+
+/** One remembered round: its state, and when that state was recorded. */
+interface GateState {
+  state: 'pending' | 'approved' | 'refused'
+  at: number
+}
+
 /** Options for {@link SecondConfirmationGate}. */
 export interface SecondConfirmationGateOptions {
   /** Minimum ms between two rounds; `0` (default) disables the time bound. */
   cooldownMs?: number
   /** Refuse to mint while this many rounds are already pending. */
   maxPendingRounds?: number
+  /** Bound on remembered round states; oldest settled rows are dropped beyond it. */
+  maxStates?: number
+  /** How long an `approved` round stays redeemable. */
+  settledTtlMs?: number
   /** Clock override, epoch ms. */
   now?: () => number
 }
@@ -247,8 +278,10 @@ export class SecondConfirmationGate {
   private readonly service: ApprovalService
   private readonly cooldownMs: number
   private readonly maxPendingRounds: number
+  private readonly maxStates: number
+  private readonly settledTtlMs: number
   private readonly now: () => number
-  private readonly states = new Map<string, 'pending' | 'approved' | 'refused'>()
+  private readonly states = new Map<string, GateState>()
   private lastRoundAt = Number.NEGATIVE_INFINITY
   private throttled = 0
 
@@ -256,6 +289,8 @@ export class SecondConfirmationGate {
     this.service = service
     this.cooldownMs = options.cooldownMs ?? DEFAULT_CONFIRMATION_COOLDOWN_MS
     this.maxPendingRounds = options.maxPendingRounds ?? DEFAULT_MAX_PENDING_ROUNDS
+    this.maxStates = options.maxStates ?? DEFAULT_MAX_GATE_STATES
+    this.settledTtlMs = options.settledTtlMs ?? DEFAULT_SETTLED_TTL_MS
     this.now = options.now ?? (() => Date.now())
   }
 
@@ -271,6 +306,7 @@ export class SecondConfirmationGate {
    */
   request(action: { toolName: string; summary?: string }): ConfirmationRound | undefined {
     const at = this.now()
+    this.prune(at)
     if (this.cooldownMs > 0 && at - this.lastRoundAt < this.cooldownMs) {
       this.throttled += 1
       return undefined
@@ -282,40 +318,75 @@ export class SecondConfirmationGate {
     this.lastRoundAt = at
     const summary = action.summary ?? `危险调用需要二次确认：${action.toolName}`
     const { pending, wait } = this.service.ask({ summary, subject: action.toolName })
-    this.states.set(pending.id, 'pending')
+    this.states.set(pending.id, { state: 'pending', at })
     const guard = wait.then(
       (outcome: ApprovalOutcome) => {
         const approved = outcome.word === 'allow' && outcome.code === 'ok'
-        this.states.set(pending.id, approved ? 'approved' : 'refused')
+        this.states.set(pending.id, { state: approved ? 'approved' : 'refused', at: this.now() })
         return approved
       },
       () => {
-        this.states.set(pending.id, 'refused')
+        this.states.set(pending.id, { state: 'refused', at: this.now() })
         return false
       },
     )
     return { id: pending.id, pending, wait: guard }
   }
 
-  /** Whether an id has been approved and not yet consumed. */
+  /** Whether an id has been approved, is still unspent, and has not expired. */
   isApproved(id: string): boolean {
-    return this.states.get(id) === 'approved'
+    const entry = this.states.get(id)
+    if (entry === undefined || entry.state !== 'approved') return false
+    return this.now() - entry.at <= this.settledTtlMs
   }
 
-  /** Consume one approval; true at most once per id. */
+  /**
+   * Consume one approval; true at most once per id.
+   *
+   * An expired or refused row is dropped here too, so presenting a stale id
+   * cannot keep it alive by retrying (t33).
+   */
   consume(id: string): boolean {
-    if (this.states.get(id) !== 'approved') return false
+    if (!this.isApproved(id)) {
+      this.states.delete(id)
+      return false
+    }
     this.states.delete(id)
     return true
   }
 
   /** Live rounds (for diagnostics and the state route). */
   openRounds(): number {
-    return [...this.states.values()].filter((state) => state === 'pending').length
+    return [...this.states.values()].filter((entry) => entry.state === 'pending').length
   }
 
   /** How many requests were refused by the cooldown (diagnostics). */
   throttledCount(): number {
     return this.throttled
+  }
+
+  /**
+   * Forget settled rounds past their lifetime, then trim to the bound.
+   *
+   * Live (`pending`) rounds are never dropped here: the phone may still answer
+   * them and the approval service owns their real lifetime. Only settled rows are
+   * evicted, oldest first — losing an `approved` row early would refuse a
+   * legitimate redemption, so the bound is a backstop, not the primary
+   * mechanism (t33).
+   *
+   * @param at - the clock reading for this pass.
+   */
+  private prune(at: number): void {
+    const cutoff = at - this.settledTtlMs
+    for (const [id, entry] of this.states) {
+      if (entry.state !== 'pending' && entry.at < cutoff) this.states.delete(id)
+    }
+    while (this.states.size > this.maxStates) {
+      const oldest = [...this.states.entries()]
+        .filter(([, entry]) => entry.state !== 'pending')
+        .sort((a, b) => a[1].at - b[1].at)[0]
+      if (oldest === undefined) break
+      this.states.delete(oldest[0])
+    }
   }
 }

@@ -283,3 +283,85 @@ F91FA2E79967C5D43B5D11633CF9F1379BBC4CE8B7017CC18EFDEAA7C56A4A6B  …\lib\index.
 
 **原始读数归档**（不在交付物内）：`%TEMP%` 下的 t13 比对输出（LCP 与副本对账的完整控制台输出）；本文件所有引文均可用文中给出的 `file:line` 复现。
 **本文件之后没有未决的"我该做的实测"**：§7 的三条边界都写明了原因，且其中 B-1 已被 `docs/13 §13.3` 自己如实登记。
+
+---
+
+## 10. 账目收口（2026-10-10，append-only；**不改变本文件的 verdict**）
+
+> **性质**：本节只做**账目登记**——把"修复已经落在代码/文档里，却没有任何文档宣告关闭"的 finding 逐条对齐。**不改写 §0–§9 任何一行**，**不重评**任何评审的 verdict，也**不回改**被收口文档（`docs/09`/`docs/10`/`docs/11`/`docs/11b`/`docs/12`/`docs/05` 的 finding 表**保持原样**：表里的"未关闭 / 移交 / resolved=否"是**当时的实话**，按 append-only 保留）。
+> **判据纪律**：凡本节写"关闭"，判据一律是**当前仓库内可读的证据**（`file:line` 或可跑的检索）；凡判据不足，一律写"**未能从仓库内证据判定**"，**不猜**、不发明关闭。
+> **与 `:285` 的关系**：末行那句"本文件之后没有未决的'我该做的实测'"讲的是**本轮复核者自己**的实测清单，与本节不冲突——本节登记的是**别人**的 finding 的账目状态。
+> **读数的时效**：本节全部读数取自 **2026-10-10 18:1x–18:3x（+08:00）**；`src/client/**` 当时**正被另一个任务改写**，故凡涉及 `src/client/**` 的一律以**符号名/用例名**为判据，行号只作"本轮读数"标注。
+
+### 10.1 `docs/09` **F8**（low）—— 代码已修，**从未宣告关闭**
+
+| 项 | 内容 |
+|---|---|
+| 原位 | `docs/09-review-host-core.md:256`（F8 行："**移交 host-eng**：`tools/harness/harness.ps1 -Action dumpconfig` 实际把组合树写进 `scratch.out`（覆盖挂载日志），与提示的 `dumpcfg.out` 不符"）；同源的另两处登记：`docs/09:223`、`:265`（"F8 移交 host-eng"），以及 `docs/03-verification.md:118` 的 **V-3**（low，同一条工具链坑） |
+| 当前读数（代码） | `tools/harness/harness.ps1` 的 `Invoke-DumpConfig`：`:375-378` 注释**逐字**记 "**V-3/F8**: the dump is a one-shot command… the message used to name dumpcfg.out while the redirect wrote scratch.out"；`:379-380` 现在把 dump 写到**自己的**一对文件 `logs\dumpcfg.out` / `logs\dumpcfg.err`；`:387` 打印 `mount log untouched: …`。用法/帮助行（`:32-33`）也写着 "dumpconfig - write the composed scratch profile tree to `<workspace>\_harness\logs\dumpcfg.out`（its own files: never truncates the instance's mount log scratch.out）" ⇒ **提示与实现现已一致**（F8 的 requiredFix 是"或改实现、或改提示"，此处两条都做到了） |
+| 处置 | **修复已在代码里（可核）；文档侧从未宣告关闭，也无第三方复核留档。** 本节据代码现状记为"**已修复（无复核留档）**"，并**不**代替一次正式复核：若要做实，应由第三方按 `harness.ps1` 现文重跑一次 `-Action dumpconfig` 并核对 `logs\scratch.out` 未被截断 |
+| 复核命令 | `(Select-String -Path tools\harness\harness.ps1 -Pattern 'V-3/F8').LineNumber` → **375**；`(Select-String -Path tools\harness\harness.ps1 -Pattern 'dumpcfg.out').LineNumber` → **32, 378, 379**（`:32` 是用法规约、`:378` 是 F8 注释、`:379` 是实现） |
+
+### 10.2 `docs/11` **F1 / F2 / F4**（low×3）—— 修复 + 独立复验都有，**逐条宣告缺失**
+
+| finding | 原位 | 修复后的**独立复核**（第三方、真实渲染引擎） | 处置 |
+|---|---|---|---|
+| **F1**（抽屉展开时右栏消失） | `docs/11-review-mobile-css.md:202` | `docs/11b-review-mobile-css-repair.md:80`（§4 验收 2：966/830px 两档"回到第一行、高度非零、面板可见且右上角可命中"；1440px **零命中**） | **关闭** |
+| **F2**（40px 触控目标被 28px 条裁/盖） | `docs/11:203` | `docs/11b:59`（§4 验收 1：盒子 40px＋**逐像素**命中恰 40px＋隐藏 `paneBody` 后读数不变） | **关闭** |
+| **F4**（`?mobileCss=1` 越过宿主开关） | `docs/11:205` | `docs/11b:123`（§4 验收 4：产物层 fail-safe 公式 + 运行期停用后回到原生值，即 `mobileCss=false ⇒ 零注入`） | **关闭** |
+
+- 复核的总体裁定在 `docs/11b:13`/`:15`（**verdict: pass**，0 blocker / 0 high / 0 medium；2 low 记为 L1/L2）。
+- **附带登记：`docs/11` F3**（low，"选择器证据只在 `_recon` 转储"）**不在本节的收口清单内**，但顺带核到它**实质已修**：`docs/05-mobile-css-selectors.md:49` 自述"**t26 补全，T-10**：上表每一条都指向 `docs/evidence/` 内的文件与行号/规则号……现已归档到 `docs/evidence/mobile/`"，且 `docs/evidence/mobile/MANIFEST.txt` 与 6 份归档件在位（自述 t26）。**注意**：脱敏改动了其中 2 份派生摘录，该 MANIFEST 的两行 sha256/字节数已不再与现文件一致 —— 见 `docs/README.md` §1.1。
+
+### 10.3 `docs/11b` **L1**（low：34px 历史反事实未独立复现）—— **仍开放（可审计性，不阻塞）**
+
+- 原位：`docs/11b:151`（L1 行），复述在 `:78`（"**修复前 34px 的历史反事实：部分确认（未独立复现）**"）与 `:15`。
+- 现状（本轮复核）：`docs/05-mobile-css-selectors.md:93`（"**F2 —「40px 触控目标」原来只有 34px（实测，修复前）**"）、`:103`（"⇒ **有效命中高度 34px**"）、`:244`（"不这样做则 40px 目标只有 34px 可命中（§2.4 实测）"）**仍以 t26 自测口径持有 34px**；`test/client-mobile-css.test.mjs:755` 的注释同样写 "touch target was 34px"，但该文件里**没有任何用例测量 34px**（同文件的相关断言是 `:768` 的 `overflow-y: visible`）。
+- **L1 给的两条 requiredFix 均未执行**（"同一页内两条独立 `<style>` 并排对照"或"留档 §6.3 量测脚本的原始输出"）：仓库内找不到该对照证据。
+- 处置：**仍开放**。性质是**可审计性**（`docs/11b:15` 已明确"结论不依赖该数字、不阻塞"）⇒ 若队长要收口，最省的做法是照 L1 的第一条做一次并排对照并留档，而不是改结论。
+
+### 10.4 `docs/11b` **L2**（low：`overflow-y: visible` 的横向溢出副作用）—— **仍开放**
+
+- 原位：`docs/11b:152`（L2 行），另见 `:53`（产物层代价面登记）与 `:162`（U5）。
+- 现状（本轮复核）：`docs/05` §6.3 的"**t26 新增：已知代价与保留项**"表（`:240-247`，4 行 = 标签条抬高 12px / `tabClose` 32×32 / 面板宽度交回框架 / `pointer-events`）**没有**这一条；`test/client-mobile-css.test.mjs` 里**没有**"多标签下 `stripTabs.scrollWidth > clientWidth` 仍可横向滚动"的用例。
+- 处置：**仍开放**（L2 的两条 requiredFix——"在 `docs/05 §6.3` 写明副作用"或"加一条横向滚动回归用例"——**均未执行**）。
+
+### 10.5 `docs/10` **F1**（low：`pair-state.ts` 的 `new URL` 无 try/catch）—— **已修复 + 有回归用例 ⇒ 记为关闭**
+
+- 原位：`docs/10-review-client-pair.md:209`（F1 行；该行 `resolved` 栏当时写"**否**（本次评审不改 `src/**`，交下游修复）"）。
+- **本轮对 `src/client/pair-state.ts` 的实读**（符号为稳定判据）：文件里已有 `tryParseUrl()`——函数体就是 `try { return new URL(value) } catch { return undefined }`；其上方文档注释**逐字**点名 "Those used to escape as a `TypeError` out of `interpretPairResponse` — see **t12 finding F1**"。`interpretPairResponse` 在 `isAbsoluteHttpUrl` 过词法检查之后**再**走 `tryParseUrl`，`undefined` ⇒ `failed('unexpected', 'HTTP 200 · url 不是可解析的绝对 URL')`。即 F1 的 requiredFix ①②**两条都已落地**。`src/client/pair-card.ts` 的加载链也已补上终结 `.catch()`（其注释逐字写 "finding F1 was exactly this: `loadPairState` could reject"）。
+- **回归用例（在案可核）**：`test/client-pair.test.mjs:541`（注释 "Robustness closure for t12 finding F1"）、`:574`（`card state (F1): a regex-passing but unparseable url lands in a terminal branch`，敌意串逐字含 `https://[::1`、`https://a:b`、`https://%zz`、`https://x%2`）、`:614`、`:657`、`:685`。
+- 处置：**关闭**（修复 + 回归用例双证据）。**留痕**：`docs/10` 的 `resolved=否` 是当时的实话，此后**没有任何文档**逐条宣告关闭——本条即该宣告。
+- **限制（诚实）**：`src/client/**` 正在被并发改写 ⇒ 本条的判据是**符号名**（`tryParseUrl` / `interpretPairResponse` / `pair-card` 的 `.catch()`）与**用例名**；行号（本轮读数：`pair-state.ts` 的 `tryParseUrl` 定义 :131、调用点 :175）**会漂移**，不要当稳定标识。
+
+### 10.6 `docs/12` Round-1 **O-1**（decide 已落账但手机可能看到错误页）—— **仍开放（文案/可用性）**
+
+- 原位：`docs/12-review-hardening.md:56`（"建议在 `/decide` 的 HTML 与推送文案里说明'以再次打开的结果页为准'"）。
+- 现状（本轮复核）：在 `src/**`（含 `src/routes.ts` 的 `/decide` 处理器与审批推送文案）按"结果页 / 再次打开 / 以…为准"检索，**0 命中** ⇒ 该建议**未被实施**。（同日 `src/client/**` 正被改写；`src/routes.ts` 未在该范围内。）
+- 处置：**仍开放**，且没有任何文档宣告关闭。性质是**文案**，不是授权缺陷——`docs/12:59` 的 O-4 边界说明（`/decide` 不需要 cookie 是能力 URL 设计）不变。
+
+### 10.7 `docs/12` Round-2 **O-R2-1**（F5 收窄缺"压力上限以外语义"的主机侧回归用例）—— **仍开放**；O-R2-2 亦仍为遗留
+
+- 原位：`docs/12:268`（O-R2-1）、`:269`（O-R2-2）。
+- 现状（本轮读到的覆盖）：`test/host-device.test.mjs:509`（`F5 (t29): the confirmation gate stops minting at the pending-pressure ceiling`，断言达上限后 `throttledCount()===1`）、`:525`（`F5 (t29): an optional time cooldown is available and off by default`）；`test/acceptance-hardening.test.mjs:1346`（`adversarial: a confirmation flood is throttled without minting new rounds`：以真推送接收端计轮数，抑制生效时断言**不铸轮、不推送**，并以审计行含 `confirm-throttled` 为判据）。
+- 处置：**仍开放**（无关闭记录）。`docs/12:268` 的口径是那几处仍属"**本评审的验收用例/探针**"而非主机侧回归用例；**是否由 `acceptance-hardening` 那条用例关闭 O-R2-1，属队长/后续评审的裁定，本收口不代判。**
+- `docs/12` **O-R2-2**（`docs/19` 与 t29 口径对齐）在 `docs/12:306` 仍写作"**遗留**"；`docs/06:160` 亦写"若 T13/T11 认为不足，可作为新任务处理" ⇒ **仍在册**。
+
+### 10.8 `docs/12` Round-2 **U-R2-1**（"冷却曾在某个中间状态被打开"）—— **仍为"推断，非已证"**
+
+- 原位：`docs/12:270`（自标"推断，非已证"：直证 = 当时的常量取值，作者没有）。
+- 现状：`docs/06-hardening-contract.md:159` 的 t31 更正逐字含"早先版本误记为'最小间隔 5000ms'，**该说法作废**"，`docs/12:305` 记 **F5-R2-1 关闭**。⇒ 与推断**相容**，但**没有**给出当时的常量取值。
+- 处置：**仍只能记为"推断，非已证"**（与 `docs/12:270` 自身的标注一致）；本节**不**把它升级为结论。
+
+### 10.9 `docs/05:275` 键盘避让"须走新任务"—— **仍开放（条件未触发、未立任务）**
+
+- 原位：`docs/05-mobile-css-selectors.md:275`（"**A 的修复方向（仅在 A2 确认为真问题时）**……**属代码改动，须走新任务，不在 t9/t4 内动。**"）。
+- 现状：常量仍在（本轮读数 `src/client/mobile-css.ts` 的 `export const KEYBOARD_MIN_INSET_PX = 120`，定义行 :69 —— 该文件正被并发改写，**行号会漂移**）；仓库内**找不到**为这次改动开出的任务号，也找不到关闭记录。它的触发条件本身属 `NOT-VERIFIED-LOCALLY`：`docs/05:264`-`:273` 的 **A2** 要真机确认，`:307` 把 A2 列为"真机验收的关键闸门"。
+- 处置：**仍开放**（未立任务）；在 A2 真机判定为真问题之前，按 `docs/05:275` 的口径**不应**动代码。
+
+### 10.10 本节**不**覆盖的范围（避免误读）
+
+- 本节**不重评**任何 verdict；**不覆盖** `docs/12` 的 F1–F5（已由 `docs/12` §10/§11 与 `docs/00-contract.md` 的 `CHANGE-t29-A` 收口）、也**不覆盖**本文件 §2–§6 已 pass 的验收项。
+- 本节**不回改**任何被收口文档：`docs/09:256`、`docs/10:209`、`docs/11:202-205`、`docs/11b:151-152`、`docs/12:56`/`:268-270`、`docs/05:275` **均保持原样**（那些表里的"未关闭/移交/resolved=否"是当时的实话）。
+- 与本节同一轮的另两处文档收口：`docs/24-post-g2-route-gating-matrix.md` 新增的**附录 C**（F-1 生效裁定 + `docs/00` 行号对账）与**新建**的 `docs/README.md`（`docs/` 索引 + 脱敏说明）。三处**都没有**触碰 `docs/00`/`docs/06`/`src/**`/`lib/**`/`test/**`/`tools/**`，没有 build、没有重启、没有起第二个 HTTP 服务。
+- **追加性可核**（本节写作时刻，仓库 `HEAD` = `0f08700`）：`git diff --numstat -- docs/28-review-final-doc-deltas.md` → **`82  0`**（仅新增、**0 行删除**）⇒ 与"不改写 §0–§9 任何一行"自述一致（该命令可随时复跑；若此后又被追加，新增数会变大，但**删除数应恒为 0**）。

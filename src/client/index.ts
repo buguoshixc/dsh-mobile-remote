@@ -18,18 +18,35 @@
  *   Both registrations go through waiters and swallow their own failures: a slot
  *   this plugin cannot claim must cost the user a missing card, never a broken
  *   client — see `pair-card.ts` `safeRegister`.
+ * - `apply` is also where the module URL is captured, once, and handed to the
+ *   narrow-screen layer. It must happen here rather than in a lazy read: DSH's
+ *   loader drops the bundle's `<script>` element on `load` and materializes this
+ *   factory afterwards, so every moment after activation is already too late for
+ *   a DOM lookup (t34 finding C1, `mobile-css.ts` `captureModuleUrl`).
  *
  * @module dsh-mobile-remote/client
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 
-import { installNarrowScreenLayer } from './mobile-css.ts'
+import { captureModuleUrl, installNarrowScreenLayer } from './mobile-css.ts'
 import { registerPairSurfaces } from './pair-card.ts'
 import { injectCardStyles } from './styles.ts'
 
 /** Hard dependency: the slot service (provided by `ui-renderer`). */
 export const inject = ['slots']
+
+/**
+ * This module's own URL, captured once when the factory runs.
+ *
+ * DSH materializes the factory on first import, i.e. this statement is the
+ * earliest point in the plugin's own code where the page can still be asked about
+ * the bundle load — one task *after* `defaultLoadBundle` removed the `<script>`
+ * element (`docs/evidence/dsh-client-modules__lib__client.js:451-458` vs `:17-21`).
+ * The value is handed to the narrow-screen layer, so nothing below has to look at
+ * the page again (t34 finding C1, `mobile-css.ts` `captureModuleUrl`).
+ */
+const MODULE_URL = captureModuleUrl()
 
 /**
  * Mount the browser half.
@@ -51,8 +68,14 @@ export const inject = ['slots']
  */
 export function apply(ctx: Context): void {
   const mount = (): (() => void) => {
+    // The capture above is the factory-entry answer; a page that had nothing to
+    // say *then* is asked once more here rather than frozen as "never", because a
+    // load record only ever appears (the bundle must load before this runs) and a
+    // first mount must not decide the question for a page that was still empty.
+    // `undefined` is a valid answer either way: no override, the host tiers decide.
+    const environment = { moduleUrl: MODULE_URL ?? captureModuleUrl() }
     const disposeStyles = injectCardStyles()
-    const disposeMobile = installNarrowScreenLayer()
+    const disposeMobile = installNarrowScreenLayer(environment)
     registerPairSurfaces(ctx)
     return () => {
       disposeMobile()

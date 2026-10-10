@@ -193,6 +193,46 @@ export function sourceAddress(
   return sourceFacts(headers, socketRemoteAddress).source
 }
 
+/** Canonical UUID (v4 in practice): what the audit must be able to *name*. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Whether a bare run of credential-shaped characters really is a secret.
+ *
+ * The previous rule redacted **any** 24+ character run of `[A-Za-z0-9_-]`, which
+ * swallowed the very identifiers the audit exists to record: a UUID is 36 such
+ * characters, so `device=<uuid>` was written as `device=<redacted>` and the P4
+ * device-level trail could never say which device was revoked, un-revoked or
+ * issued a grant (t33). A long single-label hostname was mangled the same way.
+ *
+ * Length alone cannot separate the two, but *character classes* can:
+ *  - a UUID, and any hostname label, is lowercase (hex digits and `-` only), and
+ *    a UUID's longest unbroken run is 12;
+ *  - every real credential in this composition is `base64url(randomBytes(32))`
+ *    — the launch token, the browser-session secret, the decision and device
+ *    keys derived from it — which mixes upper case and lower case. The chance a
+ *    43-character base64url value has no upper case at all is about 3e-10;
+ *  - a raw hex digest/secret is a single 40+ character lowercase-hex run, which
+ *    a UUID (hyphenated, max run 12) can never be.
+ *
+ * @param value - one bare run matched by the caller's scanner.
+ * @returns true when the run should be replaced with `<redacted>`.
+ */
+function looksLikeSecret(value: string): boolean {
+  if (UUID_PATTERN.test(value)) return false
+  if (/^[0-9a-f]{40,}$/.test(value)) return true
+  // A run this long is not an identifier whatever its shape: no UUID, hostname
+  // label or device id reaches 64 characters, while a credential pasted into an
+  // exception message, or a pathological blob an attacker sends, routinely does.
+  // Keeping this catch-all is also what holds the `detail` field's bound: without
+  // it a 400-character filler run survives redaction, the text then has to be
+  // truncated, and the visible-length marker pushes the field past `SAFE_TEXT_LIMIT`
+  // (measured: 210 > 200) — the bound still held, but by accident of the marker
+  // rather than by redaction.
+  if (value.length >= 64) return true
+  return /[A-Z]/.test(value) && /[a-z]/.test(value)
+}
+
 /**
  * Strip anything token- or cookie-shaped out of free-form text.
  *
@@ -201,6 +241,9 @@ export function sourceAddress(
  * credential *values*, not just credential spellings, because an exception
  * message carries whatever the thrown code put in it — `boom ${token}` is a
  * shape that a `?token=`-only rule walks straight past (F2).
+ *
+ * It must not, however, redact the identifiers the record is *about*: see
+ * {@link looksLikeSecret} for why length alone was the wrong test (t33).
  *
  * @param text - candidate text.
  * @returns the text with credential values replaced by `<redacted>`.
@@ -211,18 +254,27 @@ export function redact(text: string): string {
     .replace(/dsh-auth-[A-Za-z0-9_-]+/gi, 'dsh-auth-<redacted>')
     .replace(/\bcookie\s*[:=]\s*[^\s;]+/gi, 'cookie=<redacted>')
     .replace(/\b(?:bearer|authorization)\s*[:=]?\s*[A-Za-z0-9._~+/=-]{16,}/gi, '<redacted>')
-    // Bare token shapes: every real credential in this composition is
-    // base64url(randomBytes(32)) = **43 characters** (the launch token in
-    // client-connection's `processLaunchToken`, the browser-session secret, and
-    // the device/decision keys derived from it), so the floor sits *below* that
-    // measured minimum. F6 found a 29-character bare token surviving the earlier
-    // 32-character floor; 24 keeps a margin under 43 while staying above
-    // ordinary identifier lengths.
-    .replace(/[A-Za-z0-9_-]{24,}/g, '<redacted>')
+    // Every capability this plugin mints is `v1.<payload>.<signature>`: the
+    // decision link and the device grant alike. The prefix is what makes the
+    // shape unambiguous, so it is matched even when the body looks innocuous.
+    .replace(/\bv\d\.[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]+)*/g, '<redacted>')
+    // Bare shapes, judged by character class rather than by length.
+    .replace(/[A-Za-z0-9_-]{24,}/g, (match) => (looksLikeSecret(match) ? '<redacted>' : match))
 }
 
 /** Default bound for any text this plugin echoes. */
 export const SAFE_TEXT_LIMIT = 200
+
+/**
+ * Bound for the recorded HTTP method.
+ *
+ * The method is whatever the client wrote on the request line, so it is both
+ * attacker-controlled and unbounded: a 9000-character "method" was recorded
+ * verbatim, which contradicts this module's chosen-scalars design and lets one
+ * request put ~9 KB into the ring buffer (t33). The IANA registry's longest
+ * method is far below this bound.
+ */
+export const METHOD_LIMIT = 16
 
 /**
  * Bound a display string, keeping its length visible.
@@ -368,7 +420,7 @@ export class AuditLog {
     const entry: AuditEntry = {
       ts: this.now().toISOString(),
       event: AUDIT_EVENT,
-      method: input.method.toUpperCase(),
+      method: truncateForDisplay(coerceText(input.method).trim().toUpperCase(), METHOD_LIMIT),
       path: pathnameOnly(input.path),
       result: input.result,
       // The field is an address, not free text: normalize even when a caller

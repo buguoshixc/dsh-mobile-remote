@@ -485,3 +485,11 @@ html { --dsh-mobile-vvh: 100vh; }                          /* 由 visualViewport
 - 插件 bundle：`ui-layout.js`、`ui-sidebar.js`、`ui-sidebar-right.js`、`ui-conversation.js`、`ui-chat.js`、`ui-primitives.js`、`ui-renderer.js`、`ui-approval.js`、`ui-sidebar-terminal.js`、`ui-goal.js`、`ui-user-questions.js`、`ui-attachment.js`、`ui-shortcuts.js`、`ui-deliverables.js`、`ui-sidebar-documentpreview.js`、`ui-settings-account.js`、`ui-plan.js`、`ui-schedule.js`、`ui-trajectory.js`、`ui-workflow-run.js`、`ui-settings-models.js`
 - `shell-index.js`：off=578670/578808/579179/579796/601029/604306/610222/610370/610799/613754/614396/614649/618635/620425/620482/620794/620996
 - `dist/index.html:5,16`；`ui-layout__README.md:30,32,37,39,41,57,93`
+
+---
+
+## 附录 · t33 更正（append-only）
+
+> §6.2 的第 **1/3/4/5** 行（以及 §内引用它们的行）记录的是 t5/t26 的验收策略：用**全局**选择器（`button`、`[role='button'|'menuitem'|'menuitemradio'|'option'|'treeitem'|'tab']`、`[class*='_button_'|'_iconButton'|'_iconBtn'|'_toggle']`）把所有宿主编件抬到 40px。**t33 已把这批全局选择器收窄**——它们会让任何 ≤1024px 窗口下宿主**全部**控件被 `!important` 改尺寸且无法覆盖。
+>
+> 本清单作为**宿主 DOM 现状的登记**仍然有效（DOM 本身没有变），但**不再是本插件 CSS 的作用面**。实际作用面与代价见 `docs/05-mobile-css-selectors.md` 的「附录 · t33 触控目标收敛更正」。上表第 13 行建议的 `[role='menuitem']` 等角色选择器同样**不再采用**。

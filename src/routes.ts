@@ -638,8 +638,13 @@ export function createRevokeHandler(deps: PairRouteDeps): RouteHandler {
       enabled: config.requireSecondConfirmation,
       prefixes: config.riskyToolPrefixes,
     })
+    // The presented confirmation id is read here but **redeemed** further down,
+    // once the request body has been read and parsed. Redeeming it first — which
+    // is what this route used to do — let a malformed or oversized body burn the
+    // one-time round, so the operator had to walk to the machine and answer a
+    // second round for a request that never had a chance of succeeding (t33).
+    const presented = requirement.required ? (headerValue(req.headers, SECOND_CONFIRMATION_HEADER) ?? '') : ''
     if (requirement.required) {
-      const presented = headerValue(req.headers, SECOND_CONFIRMATION_HEADER) ?? ''
       const gate = gateOf?.()
       if (gate === undefined) {
         audit.record({ ...base, result: 'confirm-unavailable', status: 503 })
@@ -657,11 +662,6 @@ export function createRevokeHandler(deps: PairRouteDeps): RouteHandler {
           return
         }
         audit.record({ ...base, result: 'confirm-required', status: 403, detail: `confirmation=${round.id}` })
-        writeText(res, 403, REFUSAL_BODY_FORBIDDEN, false)
-        return
-      }
-      if (!gate.consume(presented)) {
-        audit.record({ ...base, result: 'confirm-invalid', status: 403 })
         writeText(res, 403, REFUSAL_BODY_FORBIDDEN, false)
         return
       }
@@ -683,6 +683,15 @@ export function createRevokeHandler(deps: PairRouteDeps): RouteHandler {
       writeText(res, 400, 'bad request', false)
       return
     }
+
+    // Only now is the one-time confirmation redeemed (see the note above): the
+    // request is well-formed, so the round is spent on something that can work.
+    if (requirement.required && gateOf?.()?.consume(presented) !== true) {
+      audit.record({ ...base, result: 'confirm-invalid', status: 403 })
+      writeText(res, 403, REFUSAL_BODY_FORBIDDEN, false)
+      return
+    }
+
     const record = (body ?? {}) as Record<string, unknown>
 
     if (record['rotate'] === true) {

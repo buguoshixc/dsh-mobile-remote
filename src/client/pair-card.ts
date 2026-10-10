@@ -191,22 +191,140 @@ function QrBlock({ url }: { url: string }): React.ReactElement {
   )
 }
 
-/** The copy-to-clipboard button (no storage: the clipboard is the only sink). */
-function CopyButton({ url }: { url: string }): React.ReactElement {
-  const [copied, setCopied] = React.useState(false)
-  const onClick = React.useCallback(() => {
-    const clipboard = globalThis.navigator?.clipboard
-    if (clipboard === undefined) return
-    void clipboard.writeText(url).then(
-      () => setCopied(true),
-      () => setCopied(false),
+/** The copy button's three states: fresh, confirmed, or "do it yourself". */
+export type CopyState = 'idle' | 'copied' | 'manual'
+
+/** The clipboard subset this card uses (absent on an insecure origin). */
+export interface ClipboardLike {
+  writeText(text: string): Promise<unknown>
+}
+
+/** The button's resting label. */
+export const COPY_IDLE_LABEL = '复制链接'
+
+/** The button's confirmation label; announced through the button's live region. */
+export const COPY_DONE_LABEL = '已复制'
+
+/**
+ * What the user is told when the browser exposes no clipboard.
+ *
+ * `navigator.clipboard` is `undefined` outside a secure context, and the card is
+ * reached over plain HTTP on a Tailscale address often enough to matter. The old
+ * handler simply `return`ed there, so the button looked broken (t34 finding C4);
+ * the URL line is `user-select: all` (styles.ts), so selecting it by hand is a
+ * real, one-gesture fallback.
+ */
+export const COPY_MANUAL_HINT = '浏览器未提供剪贴板接口，请在上面的链接上选中后手动复制。'
+
+/** How long the "已复制" confirmation stays before the label resets. */
+export const COPY_RESET_MS = 2000
+
+/**
+ * Run one copy attempt and report exactly one terminal state.
+ *
+ * The clipboard is a parameter so this contract is provable under `node --test`
+ * without a DOM: a missing API, a rejected `writeText` and a `writeText` that
+ * throws synchronously all have to end in the same readable state.
+ *
+ * @param url - the URL to copy.
+ * @param apply - receives the state the button should show.
+ * @param clipboard - the clipboard; defaults to `navigator.clipboard`.
+ */
+export function handleCopy(
+  url: string,
+  apply: (state: CopyState) => void,
+  clipboard?: ClipboardLike,
+): void {
+  const target = clipboard ?? (globalThis.navigator?.clipboard as ClipboardLike | undefined)
+  if (target === undefined || typeof target.writeText !== 'function') {
+    apply('manual')
+    return
+  }
+  try {
+    void Promise.resolve(target.writeText(url)).then(
+      () => apply('copied'),
+      () => apply('manual'),
     )
+  } catch {
+    // A hostile clipboard stub that throws instead of rejecting: the card must
+    // still end in a state the user can act on, never in a silent non-event.
+    apply('manual')
+  }
+}
+
+/**
+ * Project one copy state into the button plus its feedback.
+ *
+ * Pure, and exported for the same reason `cardBody` is: the accessibility
+ * contract — `aria-pressed` carries the state, the live region announces the
+ * label change, and the manual fallback is a *readable sentence* rather than the
+ * silent non-event it used to be — is asserted on the elements this returns, with
+ * no renderer (`test/client-pair.test.mjs`).
+ *
+ * @param state - the current copy state.
+ * @param onClick - starts one attempt.
+ * @returns the button, plus the fallback note when the browser has no clipboard.
+ */
+export function copyButtonView(state: CopyState, onClick: () => void): React.ReactNode[] {
+  const children: React.ReactNode[] = [
+    React.createElement(
+      'button',
+      {
+        type: 'button',
+        className: 'dmr-action',
+        onClick,
+        'data-dmr-action': 'copy',
+        'data-dmr-copy': state,
+        // The state half: a screen reader announces "pressed" on the change, and
+        // the polite live region announces the label itself.
+        'aria-pressed': state === 'copied',
+        'aria-live': 'polite',
+        key: 'copy-button',
+      },
+      state === 'copied' ? COPY_DONE_LABEL : COPY_IDLE_LABEL,
+    ),
+  ]
+
+  if (state === 'manual') {
+    children.push(
+      React.createElement(
+        'p',
+        {
+          className: 'dmr-copy-note',
+          'data-dmr-copy-note': 'manual',
+          role: 'status',
+          'aria-live': 'polite',
+          key: 'copy-note',
+        },
+        COPY_MANUAL_HINT,
+      ),
+    )
+  }
+
+  return children
+}
+
+/**
+ * The copy-to-clipboard button (no storage: the clipboard is the only sink).
+ *
+ * Three states, all of them visible and announced: the resting label, the
+ * confirmation (which resets after {@link COPY_RESET_MS} so a stale "已复制"
+ * cannot outlive the moment it described), and the manual fallback, whose
+ * sentence is its own live region below the row of actions.
+ */
+function CopyButton({ url }: { url: string }): React.ReactElement {
+  const [state, setState] = React.useState<CopyState>('idle')
+  const onClick = React.useCallback(() => {
+    handleCopy(url, setState)
   }, [url])
-  return React.createElement(
-    'button',
-    { type: 'button', className: 'dmr-action', onClick, 'data-dmr-action': 'copy' },
-    copied ? '已复制' : '复制链接',
-  )
+
+  React.useEffect(() => {
+    if (state !== 'copied') return undefined
+    const timer = setTimeout(() => setState('idle'), COPY_RESET_MS)
+    return () => clearTimeout(timer)
+  }, [state])
+
+  return React.createElement(React.Fragment, null, ...copyButtonView(state, onClick))
 }
 
 /**

@@ -15,7 +15,7 @@
  */
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -220,5 +220,67 @@ test('sources stay UTF-8 without a BOM and free of GBK mojibake', () => {
     )
     const hit = MOJIBAKE.exec(bytes.toString('utf8'))
     assert.equal(hit, null, `${file} contains GBK mojibake: ${JSON.stringify(hit?.[0])}`)
+  }
+})
+
+test('the repository carries no personal identifiers', () => {
+  // t33: this repository is published on GitHub, and its first publication leaked
+  // the operator's Tailscale device name and tailnet, the Windows account name
+  // inside every absolute path, and the local workspace path. Those were removed
+  // and the published history was rewritten; this test is what keeps them out.
+  //
+  // The rule is stated *structurally* rather than by listing the leaked values:
+  // naming them here would put them straight back into the repository this test
+  // exists to protect.
+  const ALLOWED_AUTHORITIES = new Set(['demo.tailnet-example.ts.net'])
+  const CHECKS = [
+    {
+      what: 'a tailnet authority that is not the documented placeholder',
+      pattern: /[A-Za-z0-9-]+\.ts\.net/g,
+      allowed: (host) => ALLOWED_AUTHORITIES.has(host) || host.includes('example'),
+    },
+    {
+      // `C:\Users\user` (the neutral stand-in) and `C:\Users\<...>` (an explicit
+      // placeholder) are fine; any other account name is the operator's.
+      what: 'a personal Windows account name in a path',
+      pattern: /C:\\+Users\\+(?!user\b|<)[^\\\s"'),;(]+/g,
+      allowed: () => false,
+    },
+    {
+      // Allowed roots, each for a stated reason:
+      //   DSHD    - the product's own install path;
+      //   work    - the neutral stand-in for the operator's workspace;
+      //   nodejs  - a third-party runtime install path, which names no one;
+      //   develop - the DSH *upstream* build path, quoted inside `dsh-css:` markers
+      //             of the verbatim runtime copies under docs/evidence/;
+      //   Users   - a bare drive root, with no account name in it;
+      //   `.` / `<` - an elided or bracketed placeholder.
+      what: 'a local path outside the neutral roots',
+      pattern: /D:\\+(?!(?:DSHD|work|nodejs|develop|Users)\b|<|\.)[A-Za-z0-9_.-]+/g,
+      allowed: () => false,
+    },
+  ]
+
+  const files = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.(ts|mjs|md|json|yml|yaml|ps1|txt|cjs)$/.test(entry.name)) files.push(full)
+    }
+  }
+  for (const dir of ['src', 'test', 'tools', 'docs']) walk(join(repoRoot, dir))
+  for (const name of ['README.md', 'package.json', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts']) {
+    files.push(join(repoRoot, name))
+  }
+  assert.ok(files.length > 80, `expected the whole documented repository, found ${files.length} files`)
+
+  for (const file of files) {
+    const text = readFileSync(file, 'utf8')
+    for (const check of CHECKS) {
+      for (const match of text.matchAll(check.pattern)) {
+        assert.ok(check.allowed(match[0]), `${relative(repoRoot, file)}: found ${check.what} — ${match[0]}`)
+      }
+    }
   }
 })

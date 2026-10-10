@@ -10,5 +10,11 @@ dsh-web-frontend__dist__index.html	825	2146ac6dd90f5b6f3896d79e6b9a933eaecb6d905
 dsh-web-frontend__dist__assets__index-BPHePDI_.css	76338	44a24dd9a31c4e74281562aca1d3d43141aa44c6f38c0fd343f576ce476d405d	D:/work/dsh/pro/_recon/notes/app.css
 dsh-client-ui-sidebar-right__lib__client.js	331036	5e8426c9378944050768abd3706009fe22aaae764ce4a9ede85e83a349464108	D:/work/dsh/pro/_recon/notes/m-mobile/ui/dsh-client-ui-sidebar-right.js
 app.css.cited-rules.txt	4332	2059766d2f6e071a3af269f236cb3c3145ae2ba1f22457a1a51f5625577fd542	derived from D:/work/dsh/pro/_recon/notes/app.css
-dsh-client-ui-conversation__lib__client.js.excerpt.txt	2102	df1bfc910d8393426695607e641e5d46dd931198b9f738c2cf31c6991919cb45	derived from D:/work/dsh/pro/_recon/notes/m-mobile/ui/dsh-client-ui-conversation.js
-shell-index.js.excerpt.txt	1009	f5d4a97f65895788a400d6ecdb07455afac80d28f48164aec84da4c1713bf007	derived from D:/work/dsh/pro/_recon/notes/m-mobile/shell-index.js
+dsh-client-ui-conversation__lib__client.js.excerpt.txt	2085	6e1855864138e889e7385efcaf9feff0db2a5ffb12f42a3a8292f7175a07e0dc	derived from D:/work/dsh/pro/_recon/notes/m-mobile/ui/dsh-client-ui-conversation.js
+shell-index.js.excerpt.txt	992	6887ec5b2f5f4878bef0fade932d584776076bcc5945de957b01c64165a6f5da	derived from D:/work/dsh/pro/_recon/notes/m-mobile/shell-index.js
+
+NOTE (t33): this repository is published, and a privacy redaction rewrote the operator's
+tailnet authority, account name and local paths. Two DERIVED excerpts under this directory
+were shortened by that rewrite, so their size and sha256 above were recomputed and now
+reflect the redacted file. Every other row in this manifest is unchanged: the asar byte
+copies are untouched, and the terminal manifest still matches in full.
