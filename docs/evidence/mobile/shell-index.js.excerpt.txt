@@ -1,0 +1,15 @@
+# docs/evidence/mobile/shell-index.js.excerpt.txt — verbatim lines docs/05 cites.
+# Source: D:/work/dsh/pro/_recon/notes/m-mobile/shell-index.js
+# Source SHA-256: af3ff948cf3f132edbddebea93e2f9f02233b390a94bd4c9842182300be811bb  lines: 128
+#
+## shell-index.js:126
+`)}`)}function yn(e,n){const o=document.createElement("div");return o.className=e??"",n!==void 0&&(o.textContent=n),o}var tM=class{root;card;wordmark;spinner;hint;states=new Map;active=new Set;total=0;failure;constructor(e){this.root=yn(xn.boot),this.root.dataset.dshBoot="",this.card=yn(xn.card),this.wordmark=yn(xn.wordmark,"HARNESS"),this.spinner=yn(xn.spinner),this.spinner.dataset.dshBootSpinner="",this.hint=yn(xn.hint,"Loading plugins…"),this.card.append(this.wordmark,this.spinner,this.hint),this.root.append(this.card),e.append(this.root),this.updateProgress()}setTotal(e){this.total=e,this.
+
+## shell-index.js:620482
+<out of range>
+
+## shell-index.js:618635
+<out of range>
+
+## shell-index.js:613754
+<out of range>

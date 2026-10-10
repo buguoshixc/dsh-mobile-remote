@@ -1,0 +1,14 @@
+# dsh-harness-probe bundle layer.
+#
+# A bundle patch is the only seam a profile has for mounting host code: the
+# launcher merges this row into the composed tree, then resolves `name` as a
+# module from the profile directory (its `node_modules`), exactly like the
+# shipped bundles resolve from the dsh installation directory.
+- insert:
+    - id: harness-probe
+      # Node-resolvable package name — must stay in sync with package.json `name`.
+      name: 'dsh-harness-probe'
+      config:
+        # Echoed back by GET /harness-probe so a caller can prove *which*
+        # generation of the bundle is mounted (edit it to test live reload).
+        marker: 'harness-probe-v1'

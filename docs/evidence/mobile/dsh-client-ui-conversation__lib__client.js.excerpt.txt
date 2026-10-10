@@ -1,0 +1,24 @@
+# docs/evidence/mobile/dsh-client-ui-conversation__lib__client.js.excerpt.txt — verbatim lines docs/05 cites.
+# Source: D:/work/dsh/pro/_recon/notes/m-mobile/ui/dsh-client-ui-conversation.js
+# Source SHA-256: 64843c950b829f44feed3248af6c46bbd620cf85e7c687b4f7f60e1ec4eb4782  lines: 18478
+#
+## dsh-client-ui-conversation.js:15797
+const css$4 = ".Dc7zOa_root{background:var(--dsw-alias-bg-base);flex-direction:column;min-width:0;height:100%;display:flex;position:relative}.Dc7zOa_header{box-sizing:border-box;border-bottom:.5px solid var(--dsw-alias-border-l3);flex:none;grid-template-columns:auto minmax(0,1fr);min-height:76px;padding:10px 28px 0 20px;display:grid}.Dc7zOa_header:where(:not(:has(.Dc7zOa_tabs))){min-height:0;padding-bottom:10px}.Dc7zOa_headerBlank{border-bottom:none;min-height:0;padding-bottom:0}.Dc7zOa_headerBlank .Dc7zOa_headerCorner{margin-left:auto}html:not([data-platform=darwin]) .Dc7zOa_headerSessionless
+
+## dsh-client-ui-conversation.js:16325
+"data-composer-seat": "",
+
+## dsh-client-ui-conversation.js:16329
+return (0, react_jsx_runtime.jsxs)("div", {
+
+## dsh-client-ui-conversation.js:16338
+"data-conversation-scroll": "",
+
+## dsh-client-ui-conversation.js:16227
+const seatResizeRef = (0, react.useCallback)((seat) => {
+
+## dsh-client-ui-conversation.js:17172
+const css$1 = ".RlGAzG_root{padding:0 var(--dsh-composer-side-clearance) 4px;flex-direction:column;align-items:center;display:flex}.RlGAzG_dock{justify-content:center;align-items:center;gap:12px;max-width:100%;padding-top:4px;display:flex}.RlGAzG_hero .RlGAzG_dock:empty{display:none}.RlGAzG_hero{padding:0 var(--dsh-composer-side-clearance)}.RlGAzG_notice{width:100%;max-width:var(--dsh-composer-card-max-width);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);margin-bottom:6px;padding:4px 8px;font-size:12px;line-height:18p
+
+## dsh-client-ui-conversation.js:17838
+if (occurrence === null || region === null || !occurrence.contains(region) || target.closest("[data-approval-key], iframe, .xterm, [inert]") !== null) {

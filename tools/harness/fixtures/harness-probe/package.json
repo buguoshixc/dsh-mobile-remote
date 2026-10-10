@@ -1,0 +1,19 @@
+{
+  "name": "dsh-harness-probe",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Minimal DSH host-side bundle used by tools/harness/verify-harness.ps1 to prove that a bundle installed into a scratch profile mounts and serves host code end-to-end.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

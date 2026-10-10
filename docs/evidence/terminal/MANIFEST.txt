@@ -1,0 +1,83 @@
+MANIFEST — 终端（xterm）运行时资源提取产物
+任务：t16 / P0.6
+生成时间：2026-10-10（Asia/Shanghai）
+生成方式：只读提取，未修改任何 DSH 文件
+
+====================================================================
+0. 来源与只读声明
+====================================================================
+来源归档 : D:\DSHD\resources\app.asar              (121,348,951 bytes)
+镜像副本 : D:\work\dsh\yuankong\_harness\extracted\dsh\node_modules\@deepseek-ai\**  (host-dev 抽取，本轮已逐文件校验为字节相同)
+只读工具 : D:\work\dsh\pro\_recon\asar.mjs  (cmd = ls | cat | save | find)
+DSH 版本 : 0.2.0-rc.2（_harness\extracted\dsh\desktop-runtime.json: release.version）
+
+铁律遵守：
+  R1 未触碰任何 DSH / Electron 进程（无 taskkill / Stop-Process / restart）
+  R2 未读写 C:\Users\user\.dsh\profiles\desktop\**
+  R3 未修改 D:\DSHD\**（仅用 asar.mjs save 做只读读取）、未修改前端 dist、未修改 DSH 源码
+  R4 未启动任何 HTTP 服务
+  R5 写入仅限 dsh-mobile-remote\docs\04c-terminal-dom-inventory.md 与 dsh-mobile-remote\docs\evidence\terminal\**
+
+====================================================================
+1. 直接提取自 app.asar 的原始文件（保存时保留原始相对路径可辨识性）
+====================================================================
+# 文件                                                            bytes    行数  SHA256
+at-deepseek-ai__dsh-client-ui-sidebar-terminal__lib__client.terminal.js   685927  13494  E6DF676716F5178F30CB57D16366A2DDFCA461BD79DE5D517D7FB3D9DD5E68BD
+at-deepseek-ai__dsh-client-ui-sidebar-terminal__lib__client.js             19869    498  F02F13042EBDBEB4C9BA336DF8CBDE1CA45E2FBFA49A8A54CD4F0A3DF59972A0
+at-deepseek-ai__dsh-client-ui-sidebar-terminal__README.md                   7343     88  CE73EBCFEB8D1869025587B4F7655BA5EAD1C82473EBCE530739D27ECB751FD4
+at-deepseek-ai__dsh-api-terminal-controller__lib__index.js                 35664   1052  62A1B5E96A7A020C12B178374F2C667E72F611B0A9DBA29F381DBCF5AD6AFDBA
+at-deepseek-ai__dsh-api-terminal-controller__lib__client.js                32700    907  F6455F76BB1EF774D343BC7789309F11F9AA7FAB10A2C3A68BCFBB41F51E43AF
+
+asar 内原始路径（= 文件名中 "__" 还原为 "\"，前缀 "at-" 代表作用域目录 "@"）：
+  dsh\node_modules\@deepseek-ai\dsh-client-ui-sidebar-terminal\lib\client.terminal.js
+  dsh\node_modules\@deepseek-ai\dsh-client-ui-sidebar-terminal\lib\client.js
+  dsh\node_modules\@deepseek-ai\dsh-client-ui-sidebar-terminal\README.md
+  dsh\node_modules\@deepseek-ai\dsh-api-terminal-controller\lib\index.js
+  dsh\node_modules\@deepseek-ai\dsh-api-terminal-controller\lib\client.js
+
+交叉校验（asar 直取 vs _harness 镜像）：上述 5 个文件 SHA256 全部 equal=True，
+即 host-dev 的 _harness\extracted\dsh 与该 DSH 安装的 asar 内容一致。
+
+====================================================================
+2. 从 client.terminal.js 内联字面量派生出的 CSS 产物
+====================================================================
+派生规则（确定性，可由 EXTRACTION-RECIPE.ps1 完全复现）：
+  1) 取 client.terminal.js 的某一整行（行号见下），取该行第一个 '"' 与最后一个 '"' 之间的子串；
+  2) 反转义 JS 字符串（\" -> " ，\\ -> \ ，\n -> 换行，\t -> 制表符）；
+  3) "*.css"        = 反转义后的**原文**（未做任何格式化，仍是压缩单行）；
+     "*.pretty.css" = 把原文中每个 '}' 替换为 '}' + LF（一行一条规则），行号即本清单与文档引用的行号。
+
+# 文件                                                                            bytes  行数  SHA256
+at-xterm__xterm@6.0.0__css__xterm.css                                              3574     1  FB0BBCAE45C416B929C1A1497990BEA9994F0F1DDDDC43D44EE97851BFBC7F32
+at-xterm__xterm@6.0.0__css__xterm.pretty.css                                       3619    45  2DE49C052B4DE874792107F40B0E63CEDE9E0ED7ED9B5EA2D30E8F598BE55E10
+at-deepseek-ai__dsh-client-ui-sidebar-terminal__src__terminal.module.css           2042     1  EC30F35355DB28CF7E1CE822E0F815DF0BED31F8EE4FFFC1D28107A50DF3341E
+at-deepseek-ai__dsh-client-ui-sidebar-terminal__src__terminal.module.pretty.css    2061    19  A73516C07C9D36EB3ED1286F8ECE4A4F14F687F5E2980844661048E7CFD6E774
+
+出处（client.terminal.js 的 1 基行号）：
+  at-xterm__xterm@6.0.0__css__xterm.css
+      <- client.terminal.js:L13045   //#region 之后的第一行；region 头在 L13042
+         region 头原文：//#region \0dsh-global-css:D:\develop\dsh-harness-windows-x64\node_modules\.pnpm\@xterm+xterm@6.0.0\node_modules\@xterm\xterm\css\xterm.css.mjs
+         注入代码在 L13046-L13053：tag.dataset.pluginCss = "@deepseek-ai/dsh-client-ui-sidebar-terminal/xterm.css"
+  at-deepseek-ai__dsh-client-ui-sidebar-terminal__src__terminal.module.css
+      <- client.terminal.js:L13056  //#region 头在 L13055
+         region 头原文：//#region \0dsh-css:D:\develop\dsh-harness-windows-x64\packages\client\ui-sidebar-terminal\src\client\terminal.module.css.mjs
+         注入代码在 L13057-L13064：tag.dataset.pluginCss = "@deepseek-ai/dsh-client-ui-sidebar-terminal/terminal.module.css"
+
+两段 CSS 均为运行时注入 <head>（非构建期静态资源）：
+  document.querySelector('style[data-plugin-css="…"]') 去重 -> createElement("style") -> head.appendChild
+
+====================================================================
+3. 本轮确认的 xterm 版本（来自 chunk 内 region 路径，非猜测）
+====================================================================
+  @xterm/xterm        6.0.0    (client.terminal.js:L13   region 头 ...\.pnpm\@xterm+xterm@6.0.0\...\@xterm\xterm\lib\xterm.js)
+  @xterm/addon-fit    0.11.0   (client.terminal.js:L13006 region 头 ...\.pnpm\@xterm+addon-fit@0.11.0\...\addon-fit.js)
+  @xterm/addon-serialize / @xterm/headless 虽在 asar 内独立存在（_recon find 结果），但**不参与**浏览器终端渲染。
+  asar 内不存在独立的 @xterm/xterm 包目录，浏览器版 xterm 只以本 chunk 内联形式存在。
+
+====================================================================
+4. 未提取项（及原因）
+====================================================================
+  client.terminal.js.map  —— 该 chunk 末行声明 //# sourceMappingURL=client.terminal.js.map（L13494），
+                             但 asar 的 lib 目录内无 .map 文件（asar.mjs ls 结果只有 client.js / client.terminal.js / index.js）。
+  DOM 转储 / 运行时快照    —— 本任务为只读考古，未连接运行中的浏览器；凡涉及"运行时 parentElement"的结论
+                             均在文档中标注为需真机一条命令确认，并给出命令原文。

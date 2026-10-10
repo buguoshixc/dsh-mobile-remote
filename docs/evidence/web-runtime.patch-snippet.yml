@@ -1,0 +1,19 @@
+# T1 冻結片段：dsh-mobile-remote 的 web-runtime 覆盖行（手机侧信任 authority）
+#
+# 用途：让手机经 Tailscale 访问时同时通过 client-connection 的 Host 围栏与
+#       Origin 同源检查。落地位置 = C:\Users\<用户>\.dsh\profiles\desktop\cordis.patch.yml
+#       顶层数组（受铁律 R2 保护：必须先备份并取得用户授权）。
+#
+# 三条硬约束（见 docs/00-contract.md §7）：
+#   1) id 与 name 必须与 @deepseek-ai/dsh-web-app/cordis.patch.yml:189-190 逐字相同；
+#   2) config 是「整键覆盖」，原有 4 个键必须全部写回；
+#   3) authority 必须与 config.pairingAuthority 逐字相同（本项目冻结值 demo.tailnet-example.ts.net：
+#      全小写、不带 scheme、不带端口、不带尾点）；不一致会导致 403 而不是 401。
+- id: web-runtime
+  name: "@deepseek-ai/dsh-web-app"
+  inject: [webStartup]
+  config:
+    openBrowser: !!js ctx.webStartup.openBrowser
+    printUrl: true
+    surfaceContext: true
+    trustedHosts: !!js "[ 'demo.tailnet-example.ts.net', ...ctx.webStartup.trustedHosts ]"

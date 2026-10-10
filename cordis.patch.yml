@@ -1,0 +1,32 @@
+# dsh-mobile-remote bundle layer.
+#
+# A profile composes its cordis tree from, in order: every bundle patch named by
+# `dsh.profile.bundles`, then the profile's own cordis.patch.yml, then any
+# `--patch` overlay (docs/00-contract.md §2.5). This file is the bundle layer of
+# `dsh-mobile-remote`, so it only has to insert the plugin row; the entry's
+# `name` is resolved as a module from the profile directory.
+#
+# `id` is this row's loader id and is deliberately the same string as the
+# client-side PANEL_KEY (`mobile-remote`) — two different namespaces, same word,
+# so a human reading logs, the patch and the UI sees one name.
+- insert:
+    - id: 'mobile-remote'
+      # Must stay byte-identical to package.json `name`, or the loader cannot
+      # import the module.
+      name: 'dsh-mobile-remote'
+      # The five keys frozen by docs/00-contract.md §3, written as *values*:
+      # this is user configuration, not an expression (only the shipped
+      # `web-runtime` row needs `!!js`, because there the source is the CLI).
+      #
+      # This is the bundle layer, so a profile's own cordis.patch.yml — applied
+      # after every bundle — overrides any of these; the row this deployment
+      # actually lands is the one in docs/00-contract.md §2.5.1.
+      # `pairingAuthority` must also appear verbatim in
+      # `web-runtime.trustedHosts` (§7), or the phone's first `/api` call is
+      # fenced off with 403 even though pairing succeeded.
+      config:
+        pairingAuthority: 'demo.tailnet-example.ts.net'
+        mobileCss: true
+        pushTopic: ''
+        approvalTimeoutMs: 120000
+        auditLog: true

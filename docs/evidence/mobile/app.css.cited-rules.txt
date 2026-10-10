@@ -1,0 +1,67 @@
+# docs/evidence/mobile/app.css — the rules docs/05 cites, with rule index (R#) and byte offset.
+# Source: the shipped dsh-web-frontend dist stylesheet; byte copy archived beside this file as
+#         dsh-web-frontend__dist__assets__index-BPHePDI_.css (the _recon dump had the same bytes).
+# total rules: 686  bytes: 76336
+#
+## R#676 off=75028  ~ #root
+html,body,#root{height:100%;margin:0}
+
+## R#73 off=7162  ~ _button_1rv3m_2{
+._button_1rv3m_2{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:4px;border:none;border-radius:var(--dsw-radius-md);cursor:pointer;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);background:transparent;padding:0 14px}
+
+## R#75 off=7496  ~ _md_1rv3m_23{
+._md_1rv3m_23{height:36px}
+
+## R#76 off=7522  ~ _sm_1rv3m_28{
+._sm_1rv3m_28{height:28px;font-size:12px;line-height:18px;padding:0 10px;border-radius:var(--dsw-radius-sm)}
+
+## R#161 off=17486  ~ _item_4ub78_90{
+._item_4ub78_90{display:flex;align-items:center;gap:6px;width:100%;min-height:34px;padding:6px 8px;border:none;border-radius:var(--dsw-radius-md);background:transparent;cursor:pointer;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-align:left}
+
+## R#576 off=63135  ~ _split_6nhg2_17{
+._split_6nhg2_17{display:flex;flex:1 1 auto;min-width:0;min-height:0}
+
+## R#579 off=63288  ~ _splitCell_6nhg2_32{
+._splitCell_6nhg2_32{display:flex;flex-basis:0;min-width:0;min-height:0}
+
+## R#580 off=63360  ~ _divider_6nhg2_39{
+._divider_6nhg2_39{position:relative;z-index:1;flex:none;touch-action:none}
+
+## R#594 off=64526  ~ _tabLayout_6nhg2_134{
+._tabLayout_6nhg2_134{display:grid;flex:1 1 auto;grid-template-rows:minmax(0,1fr);min-width:0;min-height:0}
+
+## R#595 off=64633  ~ _tabCell_6nhg2_142,
+._tabCell_6nhg2_142,._emptyTabHost_6nhg2_143{display:flex;min-width:0;min-height:0;z-index:var(--dsh-dockkit-dock-layer, 10)}
+
+## R#598 off=64884  ~ _tabHost_6nhg2_162{
+._tabHost_6nhg2_162{min-width:0;min-height:0;pointer-events:auto}
+
+## R#602 off=65228  ~ _tabHostBody_6nhg2_181{
+._tabHostBody_6nhg2_181{position:relative;min-width:0}
+
+## R#603 off=65282  ~ _tabLayoutDivider_6nhg2_186{
+._tabLayoutDivider_6nhg2_186{width:0;cursor:col-resize;z-index:calc(var(--dsh-dockkit-dock-layer, 10) + 1);pointer-events:auto}
+
+## R#606 off=65656  ~ _pane_6nhg2_209{
+._pane_6nhg2_209{display:flex;flex:1 1 auto;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+
+## R#608 off=65823  ~ _tabStrip_6nhg2_237{
+._tabStrip_6nhg2_237{display:flex;flex:none;gap:4px;align-items:center;height:28px;padding:10px 6px 0 var(--dsh-dockkit-strip-inline-start, 10px);touch-action:none}
+
+## R#609 off=65987  ~ _stripTabs_6nhg2_257{
+._stripTabs_6nhg2_257{display:flex;flex:0 1 auto;align-items:center;min-width:0;overflow-x:auto;overflow-y:hidden;scroll-behavior:smooth;scrollbar-width:none;touch-action:none}
+
+## R#615 off=66660  ~ _stripChrome_6nhg2_296{
+._stripChrome_6nhg2_296{display:flex;flex:none;gap:8px;align-items:center;height:28px;margin-left:4px}
+
+## R#621 off=67524  ~ _tab_6nhg2_134{
+._tab_6nhg2_134{position:relative;display:flex;flex:0 1 auto;align-items:center;min-width:80px;max-width:170px;height:28px;padding:0 10px;color:var(--dsw-alias-label-secondary);font-size:var(--dsh-content-font-size-secondary, 13px);line-height:1;white-space:nowrap;border-radius:var(--dsw-radius-sm);cursor:pointer;touch-action:none;user-select:none}
+
+## R#625 off=68396  ~ _tabClose_6nhg2_417{
+._tabClose_6nhg2_417{position:absolute;top:4px;right:4px;display:flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;color:var(--dsw-alias-label-tertiary);line-height:1;background:transparent;border:none;border-radius:var(--dsw-radius-sm);cursor:pointer;opacity:0;pointer-events:none}
+
+## R#635 off=69988  ~ _iconButton_6nhg2_511{
+._iconButton_6nhg2_511{display:inline-flex;flex:none;align-items:center;justify-content:center;width:28px;height:28px;padding:6px;color:var(--dsw-alias-label-secondary);line-height:1;background:transparent;border:none;border-radius:var(--dsw-radius-sm);cursor:pointer}
+
+## R#643 off=71027  ~ _paneBody_6nhg2_318{
+._paneBody_6nhg2_318{position:relative;flex:1 1 auto;min-width:0;min-height:0;overflow:auto;--dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2)}
